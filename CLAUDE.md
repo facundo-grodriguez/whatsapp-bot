@@ -11,7 +11,8 @@ Bot de atención al primer contacto por WhatsApp: responde FAQs automáticamente
 de compra y deriva a un vendedor humano. Pensado para escalar en 4 fases sin retrabajo (ver
 sección 4). Detalle de uso en [`README.md`](./README.md).
 
-**Etapa actual: MVP.** Fase 1 completa e implementada.
+**Etapa actual: MVP.** Fases 1, 2 y 3 completas e implementadas. Fase 4 (IA) es lo único pendiente
+del roadmap original.
 
 ## 2. Decisiones tomadas
 
@@ -26,7 +27,9 @@ sección 4). Detalle de uso en [`README.md`](./README.md).
 | TypeScript | Pinneado a 6.x, no a 7.x | TS7 (compilador nativo, GA jul-2026) todavía no tiene API programática estable (llega en 7.1); mejor estabilidad en 6.x para el MVP |
 | Testing | Vitest solo sobre `/engine` | Lógica pura de alto valor; es la pieza que se reemplaza en Fase 4 |
 
-## 3. Estado de módulos — Fase 1 (completa)
+## 3. Estado de módulos
+
+### Fase 1 (completa)
 
 | Módulo | Estado | Notas |
 |---|---|---|
@@ -44,6 +47,23 @@ intención de compra → derivación, silencio post-derivación, idempotencia an
 filtro de grupos y de `fromMe`, integridad referencial de categorías (FK real, no solo a nivel
 aplicación).
 
+### Fase 3 (completa) — dashboard y confiabilidad
+
+| Módulo | Estado | Notas |
+|---|---|---|
+| `db/repositories/stats.ts` | ✅ | Agregaciones del dashboard. Punto clave: distingue "resuelta por el bot" de "solo recibió el fallback" vía `needs_human_review` — de lo contrario los fallbacks inflarían la métrica que se le muestra al cliente. Filtra `direction = 'outbound'` en categorías (`category` nunca se persiste en inbound) |
+| `dashboard/` (auth, render, routes) | ✅ | `GET /dashboard` con HTTP Basic Auth (`DASHBOARD_USERNAME`/`PASSWORD`), montaje condicional — sin password no se monta la ruta, nunca queda sin proteger. HTML server-rendered, sin dependencias de templating, `escapeHtml` en todo valor interpolado |
+| `dashboard/dateRange.ts` | ✅ | Filtros `?from=`/`?to=` interpretados en zona horaria **local** del server, no UTC (bug real de v1 del plan, corregido antes de implementar) |
+| Modo degradado (`conversation/degradedMode.ts` + `handleIncomingMessage.ts`) | ✅ | Try/catch de nivel superior ante cualquier error no controlado → intenta mandar `DEGRADED_MODE_MESSAGE` y persistirlo (`error_interno`, `needsHumanReview: true`). Throttle en memoria (5 min/chat) para no mandar el mismo mensaje repetido si la falla persiste en varios mensajes seguidos |
+| `db/health.ts` | ✅ | `GET /health` hace `count(*)` real sobre `conversations` (no `SELECT 1`, que no detectaría un schema sin migrar), devuelve 503 si falla. Sin auth: lo consume un monitor externo |
+| `ecosystem.config.cjs` (PM2) | ✅ | `node_args: "--env-file=.env"` (PM2 no pasa por el script `start` de package.json) y `cwd: __dirname` (`DATABASE_URL` es relativa; sin esto, un `cwd` distinto crearía una base vacía en otro lado sin avisar) |
+
+Verificado manualmente: script contra DB de prueba con los tres outcomes de conversación sembrados
+a mano (confirmando que un fallback **no** cuenta como resuelto); servidor real con los tres casos
+vía `npm run simulate`; auth sin/con credenciales; filtro de fecha con la fecha de hoy (confirma el
+fix de timezone); error forzado temporalmente en el motor + 3 mensajes seguidos (confirma que el
+throttle manda un solo mensaje degradado, no tres); `/health` en verde.
+
 ## 4. Roadmap de fases (contexto para no romper el camino a futuro)
 
 1. **Fase 1 (completa):** motor de reglas, sin dashboard. FAQs cargadas son de ejemplo/simuladas
@@ -54,8 +74,9 @@ aplicación).
    conversación distintos, sin cruce de historial, derivación aislada por sesión, envío por la
    sesión correcta. Documentado en README, sección "Fase 2 — multi-sesión". Falta únicamente dar de
    alta la sesión en WAHA cuando haya un segundo número real.
-3. **Fase 3:** dashboard de analítica + confiabilidad (healthcheck, PM2, modo degradado). Los
-   índices de `messages`/`conversations` para las agregaciones ya existen desde la Fase 1.
+3. **Fase 3 (completa):** dashboard de analítica + confiabilidad. Los índices de
+   `messages`/`conversations` para las agregaciones, planeados desde la Fase 1, se usaron sin
+   necesidad de agregar ninguno nuevo. Detalle en la sección 3 y en el README.
 4. **Fase 4:** IA vía Vercel AI SDK, reemplazando `RulesEngine`. Único punto de cambio:
    `src/engine/index.ts`. El resto del sistema no debería tocarse gracias a la interfaz
    `ResponseEngine` (ver `src/engine/types.ts`).
@@ -74,9 +95,13 @@ aplicación).
 - **`notifyVendor()` es un stub** (solo loguea por consola). No hay todavía un canal real de
   notificación al vendedor (WhatsApp interno, email, Slack, etc.). Implementarlo es la pieza que
   falta para que la derivación sea utilizable en la práctica, no solo registrada en la base.
-- **Sin reintentos si falla el envío a WAHA**: si `sendText` tira error, el mensaje se persiste
-  igual (marcado `needsHumanReview`) pero no se reintenta el envío. Aceptable para el MVP; la Fase
-  3 (modo degradado, confiabilidad) es donde correspondería resolverlo.
+- **Sin reintentos si falla el envío a WAHA**: si `sendText` tira error en el camino feliz, el
+  mensaje se persiste igual (marcado `needsHumanReview`) pero no se reintenta el envío — el cliente
+  no recibe nada en ese caso puntual. Distinto del modo degradado de la Fase 3 (que cubre errores en
+  el resto del pipeline: motor, DB, etc., con throttle y mensaje de resguardo); este caso específico
+  (WAHA caído justo al mandar una respuesta válida) queda sin cubrir a propósito — agregar reintentos
+  automáticos ahí es una mejora futura, no se implementó para no sumar complejidad sin un caso de
+  uso real que lo pida todavía.
 - Vulnerabilidad moderada de `esbuild` en la cadena de dependencias de `drizzle-kit` (herramienta
   de desarrollo, no corre en producción). `npm audit` la reporta; el fix disponible rompe
   compatibilidad (downgrade grande de `drizzle-kit`). No se aplicó por no justificar el riesgo real
@@ -98,7 +123,8 @@ aplicación).
 
 ## 6. Próximos pasos
 
-Orden acordado con el usuario: (1) FAQs → (2) conectar número real → (3) Fase 2.
+Recorrido hasta acá: (1) FAQs de ejemplo → (2) conectar número real (probado y desconectado por
+privacidad) → (3) Fase 2 verificada → **Fase 3 completa (dashboard + confiabilidad)**.
 
 1. ~~Cargar las FAQs reales del negocio~~ — decisión del usuario: seguir con las FAQs de ejemplo
    (`src/config/rules.ts`) como muestra/demo por ahora. Reemplazar cuando haya contenido real del
@@ -107,9 +133,14 @@ Orden acordado con el usuario: (1) FAQs → (2) conectar número real → (3) Fa
    el flujo end-to-end con un mensaje real, y se desconectó (`logout` + `stop`) por el riesgo de
    privacidad documentado en la sección 5 (capturaba conversaciones personales reales). Antes de
    reconectar para uso sostenido: conseguir un número dedicado al negocio, no personal.
-3. Fase 2 (multi-sesión) — verificación y documentación ya completas (ver sección 4); solo falta
-   dar de alta la sesión real en WAHA cuando corresponda.
-4. Fase 3 (dashboard + confiabilidad) — siguiente en el roadmap, todavía sin arrancar.
+3. ~~Fase 2 (multi-sesión)~~ — verificada y documentada, sin código pendiente.
+4. ~~Fase 3 (dashboard + confiabilidad)~~ — completa, ver sección 3. Pendiente solo de uso: cuando
+   haya tráfico real, mirar `/dashboard` para validar que las métricas cuenten algo útil en la
+   práctica (hasta ahora solo se probó con datos sembrados a mano).
+5. **Fase 4 (IA) es lo único que queda del roadmap original.** Requiere decidir proveedor
+   (Claude/OpenAI/otro) y presupuesto — no se avanzó nada de esto todavía, sigue abierto.
+6. Deuda técnica que quedó anotada pero no resuelta: canal real para `notifyVendor()` (sigue siendo
+   un stub), reintento automático si falla el envío a WAHA en el camino feliz (ver sección 5).
 
 ## 7. Adaptaciones a CONSTITUTION.md
 

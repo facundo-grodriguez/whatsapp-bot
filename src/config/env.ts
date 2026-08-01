@@ -45,6 +45,12 @@ const envSchema = z.object({
   // Comportamiento del bot
   RESPONSE_DELAY_MIN_MS: z.coerce.number().int().nonnegative().default(1000),
   RESPONSE_DELAY_MAX_MS: z.coerce.number().int().nonnegative().default(3000),
+
+  // Dashboard (Fase 3). Es opcional a propósito: si no hay password configurada,
+  // la ruta /dashboard no se monta (ver src/server.ts). Así una feature secundaria
+  // nunca impide que arranque el bot, y nunca se sirve un dashboard sin proteger.
+  DASHBOARD_USERNAME: z.string().min(1).default("admin"),
+  DASHBOARD_PASSWORD: optionalNonEmptyString,
 });
 
 export type Env = z.infer<typeof envSchema>;

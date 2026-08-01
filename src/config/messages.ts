@@ -13,3 +13,12 @@ export const DERIVATION_MESSAGES = [
   "¡Genial! Te paso con alguien del equipo de ventas para ayudarte. En breve te contactan por acá.",
   "¡Perfecto! Ya te conecto con alguien de ventas. En breve te escriben por acá.",
 ];
+
+/**
+ * Mensaje de resguardo del modo degradado (Fase 3): se manda cuando algo interno
+ * falla (motor, base de datos, etc.) y el bot no puede procesar el mensaje con
+ * normalidad. Es una sola variante fija a propósito: en un escenario de falla es
+ * más importante que el texto sea simple y confiable que variado.
+ */
+export const DEGRADED_MODE_MESSAGE =
+  "Recibimos tu consulta, en breve te contactamos. Gracias por tu paciencia.";

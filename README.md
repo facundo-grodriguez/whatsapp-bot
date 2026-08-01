@@ -1,14 +1,13 @@
-# Asistente de WhatsApp — Fase 1 (motor de reglas)
+# Asistente de WhatsApp
 
 Bot de atención al primer contacto por WhatsApp: responde preguntas frecuentes automáticamente,
 detecta intención de compra y deriva la conversación a un vendedor humano cuando corresponde.
 
-Esta es la **Fase 1** de un producto pensado para escalar en 4 fases (ver `CLAUDE.md` para el
-detalle completo). En esta fase:
+Producto pensado para escalar en 4 fases (ver `CLAUDE.md` para el detalle completo). Estado actual:
 
-- Una sola sesión de WhatsApp (multi-sesión es Fase 2).
-- Motor de respuestas por **reglas de palabras clave**, sin IA (IA es Fase 4).
-- Sin dashboard todavía (Fase 3): todo por endpoints JSON.
+- **Fase 1** (motor de reglas, sin IA) y **Fase 2** (multi-sesión) completas.
+- **Fase 3** (dashboard + confiabilidad) completa — ver [más abajo](#fase-3--dashboard-y-confiabilidad).
+- Fase 4 (IA vía Vercel AI SDK) pendiente.
 - Conexión a WhatsApp vía [WAHA](https://github.com/devlikeapro/waha) (self-hosted, Docker).
 
 ## Descripción
@@ -41,6 +40,7 @@ Ver `.env.example` para la lista completa con comentarios. Las más importantes:
 | `WAHA_HMAC_KEY` | Clave para verificar la firma de los webhooks | (sin verificar) |
 | `WAHA_DRY_RUN` | Si es `true`, no envía mensajes reales: solo loguea | `false` |
 | `RESPONSE_DELAY_MIN_MS` / `MAX_MS` | Delay aleatorio antes de responder (simula tipeo humano) | `1000` / `3000` |
+| `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Credenciales de `/dashboard` (Basic Auth). Sin password, el dashboard no se monta | `admin` / (sin dashboard) |
 
 Si agregás una variable nueva, actualizá `.env.example`, `src/config/env.ts` (schema de Zod) y
 esta tabla.
@@ -189,22 +189,90 @@ en paralelo, sin reiniciar ni redeployar nada.
 > La misma nota sobre `host.docker.internal` en Windows/Mac de la sección 4 aplica acá: el webhook
 > de cualquier sesión nueva tiene que apuntar a esa URL, no a `localhost`.
 
+## Fase 3 — dashboard y confiabilidad
+
+### Dashboard
+
+`GET /dashboard` muestra, en una página HTML server-rendered (sin frontend aparte, sin JS de
+cliente):
+
+- Conversaciones **resueltas por el bot** vs. **derivadas a un vendedor** vs. **necesitan un
+  humano** — con porcentaje de cada una.
+- Respuestas agrupadas por categoría (FAQ que matcheó).
+- Mensajes pendientes de revisión humana.
+- Tiempo de respuesta promedio al cliente.
+- Volumen por sesión (útil cuando hay más de un número, ver Fase 2).
+
+> **"Resueltas por el bot" excluye los fallbacks a propósito.** Una conversación donde el bot solo
+> contestó el mensaje genérico ("no entendí tu consulta") no está resuelta — quedó esperando que la
+> mire una persona. Por eso existe la columna "necesitan un humano" en vez de mezclarla con las
+> resueltas.
+
+Protegido con **HTTP Basic Auth** (`DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` en `.env`): el
+navegador va a pedir usuario y contraseña la primera vez. Si `DASHBOARD_PASSWORD` no está seteada,
+la ruta directamente no existe (404) — nunca se sirve un dashboard sin proteger, y su ausencia
+nunca impide que el bot funcione.
+
+```
+http://localhost:3001/dashboard                          # todo el historial
+http://localhost:3001/dashboard?from=2026-08-01&to=2026-08-31   # filtrado por fecha
+```
+
+> En producción, poné esto detrás de un reverse proxy con TLS — Basic Auth manda las credenciales
+> sin cifrar en cada request si no hay HTTPS.
+
+### Modo degradado
+
+Si algo interno falla al procesar un mensaje (el motor, la base de datos, lo que sea),
+`src/conversation/handleIncomingMessage.ts` no deja al cliente en silencio: intenta mandar un
+mensaje de resguardo fijo ("Recibimos tu consulta, en breve te contactamos...") y lo persiste con
+categoría `error_interno` y `needsHumanReview: true`, para que aparezca en el dashboard.
+
+Tiene un throttle en memoria (`src/conversation/degradedMode.ts`, ventana de 5 min por chat): si la
+falla se repite en varios mensajes seguidos del mismo cliente, solo se manda **una** respuesta de
+resguardo, no una por mensaje — mandar el mismo texto diez veces seguidas sería la señal de
+automatización más obvia que existe.
+
+### Healthcheck real
+
+`GET /health` (sin autenticación, para que un monitor externo tipo UptimeRobot pueda pegarle)
+verifica que la base de datos responda de verdad, no solo que el proceso esté vivo. Si la base no
+responde, devuelve `503`.
+
+### Mantener el proceso corriendo (PM2)
+
+```bash
+npm run build
+npx pm2 start ecosystem.config.cjs
+npx pm2 startup   # deja PM2 arrancando solo cuando reinicia el servidor (seguí las instrucciones que imprime)
+npx pm2 save      # persiste la lista de procesos actual
+npx pm2 logs whatsapp-bot
+```
+
+Si el proceso se cae, PM2 lo reinicia automáticamente (`autorestart: true` en
+`ecosystem.config.cjs`). En Linux, la alternativa es un unit de **systemd** apuntando a
+`node --env-file=.env dist/server.js` con `Restart=always`; PM2 es la opción documentada acá por
+ser multiplataforma y no requerir privilegios de sistema para instalarse.
+
 ## Estructura
 
 ```
 src/
   server.ts          Arranque de Fastify: rutas, seed de categorías, shutdown ordenado
   config/             Todo lo específico del negocio (FAQs, intención de compra, env)
-  db/                 Schema de Drizzle, cliente, migraciones, repositorios
+  db/                 Schema de Drizzle, cliente, migraciones, repositorios, healthcheck
+    repositories/stats.ts  Agregaciones del dashboard (Fase 3)
   engine/             Motor de decisión (ResponseEngine). Aislado a propósito: es lo único
                        que cambia en la Fase 4 al pasar a IA
   waha/               Cliente HTTP de WAHA (sendText) y schemas de sus payloads
   webhook/             Endpoint que recibe eventos de WAHA (valida HMAC, filtra, encola)
   queue/              Cola de procesamiento en memoria (p-queue, concurrency 1)
-  conversation/       Orquestador: decide, deriva, envía y persiste
+  conversation/       Orquestador: decide, deriva, envía y persiste; modo degradado (Fase 3)
+  dashboard/          Vista HTML de /dashboard, su auth (Fase 3)
 tests/engine/         Tests de Vitest del motor de reglas (normalización, matching, decisiones)
 scripts/
   simulate-message.mjs  Dispara un mensaje simulado contra el webhook local
+ecosystem.config.cjs  Config de PM2 para producción (Fase 3)
 ```
 
 ## Dependencias

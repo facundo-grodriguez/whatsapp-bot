@@ -2,6 +2,8 @@ import Fastify from "fastify";
 
 import { CATEGORIES } from "./config/categories.js";
 import { env } from "./config/env.js";
+import { registerDashboardRoutes } from "./dashboard/routes.js";
+import { checkDatabaseHealth } from "./db/health.js";
 import { upsertCategories } from "./db/repositories/categories.js";
 import { registerWebhookRoutes } from "./webhook/routes.js";
 
@@ -41,9 +43,28 @@ async function main() {
     },
   );
 
-  fastify.get("/health", async () => ({ status: "ok" }));
+  // Sin autenticación a propósito: lo consume un monitor externo (UptimeRobot y
+  // similares), que no manda credenciales.
+  fastify.get("/health", async (_request, reply) => {
+    const dbOk = await checkDatabaseHealth();
+    if (!dbOk) {
+      return reply.code(503).send({ status: "error", db: "unreachable" });
+    }
+    return reply.send({ status: "ok", db: "ok" });
+  });
 
   await registerWebhookRoutes(fastify);
+
+  // El dashboard solo se monta si hay una contraseña configurada: nunca se sirve
+  // sin protección, y su ausencia no impide que el bot funcione.
+  if (env.DASHBOARD_PASSWORD) {
+    await registerDashboardRoutes(fastify);
+  } else {
+    fastify.log.warn(
+      "DASHBOARD_PASSWORD no está configurada: la ruta /dashboard no se monta. " +
+        "Seteala en .env para habilitar el dashboard.",
+    );
+  }
 
   // El catálogo de categorías se sincroniza en cada arranque (no solo al migrar):
   // así nunca queda desalineado si se agrega una FAQ nueva en config/rules.ts.

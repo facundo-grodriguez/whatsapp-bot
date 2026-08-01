@@ -1,8 +1,11 @@
+import { CATEGORY_ERROR_INTERNO } from "../config/categories.js";
 import { env } from "../config/env.js";
+import { DEGRADED_MODE_MESSAGE } from "../config/messages.js";
 import { getConversationById, setConversationState } from "../db/repositories/conversations.js";
 import { getConversationHistory, insertOutboundMessage } from "../db/repositories/messages.js";
 import { engine } from "../engine/index.js";
 import { sendText, startTyping, stopTyping, WahaApiError } from "../waha/client.js";
+import { shouldSendDegradedReply } from "./degradedMode.js";
 import { notifyVendor } from "./notifyVendor.js";
 
 export interface HandleIncomingMessageInput {
@@ -30,8 +33,24 @@ function delay(ms: number): Promise<void> {
  * (vía /engine), deriva a un vendedor si corresponde, y envía + persiste la
  * respuesta. Corre dentro de la cola de procesamiento (ver src/queue), nunca
  * directamente desde el handler HTTP del webhook.
+ *
+ * Envuelve TODO el procesamiento real (processIncomingMessage) en un try/catch:
+ * ante cualquier error no controlado (motor, base de datos, lo que sea) cae al
+ * modo degradado en vez de dejar al cliente en silencio (Fase 3).
  */
 export async function handleIncomingMessage(input: HandleIncomingMessageInput): Promise<void> {
+  try {
+    await processIncomingMessage(input);
+  } catch (error) {
+    console.error(
+      `[handleIncomingMessage] error no controlado en conversationId=${input.conversationId}:`,
+      error,
+    );
+    await sendDegradedReply(input);
+  }
+}
+
+async function processIncomingMessage(input: HandleIncomingMessageInput): Promise<void> {
   const conversation = await getConversationById(input.conversationId);
   if (!conversation) {
     console.error(
@@ -106,4 +125,46 @@ export async function handleIncomingMessage(input: HandleIncomingMessageInput): 
     needsHumanReview: decision.requiereRevisionHumana,
     inReplyToId: input.inboundMessageId,
   });
+}
+
+/**
+ * Modo degradado (Fase 3): último recurso ante un error no controlado en
+ * `processIncomingMessage`. El objetivo es uno solo — que el cliente nunca quede
+ * en silencio — así que cada paso tiene su propio try/catch: una falla enviando
+ * no debe impedir el intento de persistir, y viceversa.
+ */
+async function sendDegradedReply(input: HandleIncomingMessageInput): Promise<void> {
+  if (!shouldSendDegradedReply(input.sessionName, input.chatId)) {
+    console.warn(
+      `[degradedMode] throttled, no se reenvía el mensaje de resguardo a ` +
+        `${input.sessionName}:${input.chatId}`,
+    );
+    return;
+  }
+
+  try {
+    await sendText({
+      session: input.sessionName,
+      chatId: input.chatId,
+      text: DEGRADED_MODE_MESSAGE,
+    });
+  } catch (error) {
+    // Si WAHA también está caído, no hay más nada por hacer del lado del envío.
+    console.error("[degradedMode] no se pudo enviar el mensaje de resguardo:", error);
+  }
+
+  try {
+    await insertOutboundMessage({
+      conversationId: input.conversationId,
+      body: DEGRADED_MODE_MESSAGE,
+      category: CATEGORY_ERROR_INTERNO,
+      isPurchaseIntent: false,
+      needsHumanReview: true,
+      inReplyToId: input.inboundMessageId,
+    });
+  } catch (error) {
+    // La base puede ser justamente lo que está fallando. Ya se intentó lo más
+    // importante (el envío real); no dejar registro es un costo aceptable acá.
+    console.error("[degradedMode] no se pudo persistir el mensaje de resguardo:", error);
+  }
 }
