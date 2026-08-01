@@ -30,12 +30,12 @@ sección 4). Detalle de uso en [`README.md`](./README.md).
 
 | Módulo | Estado | Notas |
 |---|---|---|
-| `config/` (env, rules, purchaseIntent, messages, categories) | ✅ | 4 FAQs + 1 regla de intención de compra de ejemplo |
+| `config/` (env, rules, purchaseIntent, messages, categories) | ✅ | 4 FAQs + 1 regla de intención de compra de ejemplo; cada regla/mensaje tiene variantes de respuesta (`responses: string[]`), no un texto único |
 | `db/` (schema, cliente, migraciones, repositorios) | ✅ | Conversación identificada por `(sessionName, chatId)` — ya lista para Fase 2 |
-| `engine/` (RulesEngine detrás de `ResponseEngine`) | ✅ | 21 tests de Vitest en verde |
-| `waha/` (cliente `sendText`, tipos de payload) | ✅ | Timeout 10s, errores tipados (`WahaApiError`), modo dry-run |
-| `conversation/` (orquestador, `notifyVendor` stub) | ✅ | `notifyVendor` es un stub que solo loguea — ver sección 5 |
-| `webhook/` (HMAC, validación, filtros, Fastify) | ✅ | Filtra `fromMe`, grupos (`@g.us`), eventos que no son `message`; idempotente ante reintentos de WAHA |
+| `engine/` (RulesEngine detrás de `ResponseEngine`) | ✅ | 23 tests de Vitest en verde. Elige variante de respuesta al azar vía `engine/variant.ts` (mitigación de ban, ver sección 5) |
+| `waha/` (cliente `sendText`/`startTyping`/`stopTyping`, tipos de payload) | ✅ | Timeout 10s, errores tipados (`WahaApiError`), modo dry-run. `startTyping`/`stopTyping` nunca tiran (cosmético) |
+| `conversation/` (orquestador, `notifyVendor` stub) | ✅ | `notifyVendor` es un stub que solo loguea — ver sección 5. Antes de enviar: delay aleatorio 1-3s + `startTyping`/`stopTyping` (mitigación de ban) |
+| `webhook/` (HMAC, validación, filtros, Fastify) | ✅ | Filtra `fromMe`, grupos (`@g.us`), eventos que no son `message`, y `body` vacío (burst de sync al vincular sesión — ver sección 5); idempotente ante reintentos de WAHA |
 | `queue/` (p-queue) | ✅ | Errores dentro de una tarea encolada nunca escapan sin catch (evita crash del proceso) |
 | README / `.env.example` / script de simulación | ✅ | `npm run simulate -- "texto"` prueba todo el flujo sin WAHA conectado |
 
@@ -46,10 +46,14 @@ aplicación).
 
 ## 4. Roadmap de fases (contexto para no romper el camino a futuro)
 
-1. **Fase 1 (actual, completa):** motor de reglas, una sesión, sin dashboard.
-2. **Fase 2:** multi-sesión. La API de WAHA (`POST /api/sendText` con `session` en el body, no en
-   la URL) y el modelo de datos `(sessionName, chatId)` ya están preparados — no debería requerir
-   migración.
+1. **Fase 1 (completa):** motor de reglas, sin dashboard. FAQs cargadas son de ejemplo/simuladas
+   (decisión explícita: se prioriza tener el flujo completo funcionando antes que datos reales del
+   negocio — ver sección 6).
+2. **Fase 2 (verificada, sin código nuevo):** multi-sesión. Confirmado con un script de
+   verificación end-to-end (dos sesiones, mismo `chatId`) que ya no hay que tocar código: IDs de
+   conversación distintos, sin cruce de historial, derivación aislada por sesión, envío por la
+   sesión correcta. Documentado en README, sección "Fase 2 — multi-sesión". Falta únicamente dar de
+   alta la sesión en WAHA cuando haya un segundo número real.
 3. **Fase 3:** dashboard de analítica + confiabilidad (healthcheck, PM2, modo degradado). Los
    índices de `messages`/`conversations` para las agregaciones ya existen desde la Fase 1.
 4. **Fase 4:** IA vía Vercel AI SDK, reemplazando `RulesEngine`. Único punto de cambio:
@@ -60,7 +64,13 @@ aplicación).
 
 - **WAHA usa métodos no oficiales para conectarse a WhatsApp** y puede resultar en el baneo del
   número. Decisión ya tomada y aceptada para el MVP. Reevaluar contra la Cloud API oficial de Meta
-  antes de producción con clientes reales.
+  antes de producción con clientes reales. Mitigaciones de código ya implementadas para reducir (no
+  eliminar) el riesgo: delay aleatorio 1-3s antes de responder, indicador de "escribiendo…"
+  (`startTyping`/`stopTyping`), y variantes de respuesta para no repetir siempre el mismo texto
+  exacto (ver README, sección "Anti-ban"). Pendiente/fuera de alcance de código: cool-down/backoff
+  ante errores repetidos de sesión de WAHA — encaja con el "modo degradado" de la Fase 3, no se
+  implementó ahora. El factor que más pesa (número con SIM real y "calentado", solo responder a
+  entrantes) es operativo, no de código, y el usuario ya usa números con antigüedad real.
 - **`notifyVendor()` es un stub** (solo loguea por consola). No hay todavía un canal real de
   notificación al vendedor (WhatsApp interno, email, Slack, etc.). Implementarlo es la pieza que
   falta para que la derivación sea utilizable en la práctica, no solo registrada en la base.
@@ -71,14 +81,35 @@ aplicación).
   de desarrollo, no corre en producción). `npm audit` la reporta; el fix disponible rompe
   compatibilidad (downgrade grande de `drizzle-kit`). No se aplicó por no justificar el riesgo real
   en una herramienta dev-only. Revisar si `drizzle-kit` publica una versión que la resuelva.
+- **Hallazgo real al conectar por primera vez (2026-08-01): WAHA reenvía un burst de eventos
+  "message" con `body` vacío al vincular una sesión** — es la sincronización inicial del historial
+  de WhatsApp del engine WEBJS, no mensajes nuevos reales. Sin filtro, cada uno disparaba una
+  autorespuesta real a decenas de contactos que nunca escribieron nada. **Mitigado**: el webhook
+  (`src/webhook/routes.ts`) ahora ignora cualquier evento con `body` vacío (mismo lugar que los
+  filtros de `fromMe` y grupos).
+- **Riesgo de privacidad confirmado en la práctica: conectar un número personal expone conversaciones
+  reales y ajenas al bot.** Durante la misma prueba, una conversación real y en curso de un contacto
+  del usuario quedó capturada por el webhook (el bot no puede distinguir "cliente preguntando por
+  el negocio" de "amigo escribiéndole al dueño del número"). No se envió nada real (dry-run activo),
+  pero la conversación quedó persistida en la base de desarrollo sin que esa persona lo supiera. Se
+  resolvió cerrando la sesión de WAHA y borrando la base de datos de desarrollo. **No es un bug de
+  código, es inherente a usar un número personal/compartido.** Recomendación firme antes de dejar
+  el bot corriendo por un período largo: usar un número dedicado exclusivamente al negocio.
 
 ## 6. Próximos pasos
 
-1. Definir con el usuario cuándo arrancar la Fase 2 (multi-sesión) o si primero conviene un canal
-   real para `notifyVendor()`.
-2. Conectar un número de WhatsApp real a WAHA y validar el flujo end-to-end (hasta ahora todo se
-   verificó en modo dry-run — ver README, sección "Conectar un número real de WhatsApp").
-3. Cargar las FAQs reales del negocio en `src/config/rules.ts` (las actuales son de ejemplo).
+Orden acordado con el usuario: (1) FAQs → (2) conectar número real → (3) Fase 2.
+
+1. ~~Cargar las FAQs reales del negocio~~ — decisión del usuario: seguir con las FAQs de ejemplo
+   (`src/config/rules.ts`) como muestra/demo por ahora. Reemplazar cuando haya contenido real del
+   negocio.
+2. **WAHA sigue desconectada a propósito.** Se probó con el número personal del usuario, se validó
+   el flujo end-to-end con un mensaje real, y se desconectó (`logout` + `stop`) por el riesgo de
+   privacidad documentado en la sección 5 (capturaba conversaciones personales reales). Antes de
+   reconectar para uso sostenido: conseguir un número dedicado al negocio, no personal.
+3. Fase 2 (multi-sesión) — verificación y documentación ya completas (ver sección 4); solo falta
+   dar de alta la sesión real en WAHA cuando corresponda.
+4. Fase 3 (dashboard + confiabilidad) — siguiente en el roadmap, todavía sin arrancar.
 
 ## 7. Adaptaciones a CONSTITUTION.md
 

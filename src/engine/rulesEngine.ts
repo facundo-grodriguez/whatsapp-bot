@@ -1,10 +1,11 @@
 import { CATEGORY_SIN_MATCH } from "../config/categories.js";
-import { FALLBACK_MESSAGE } from "../config/messages.js";
+import { FALLBACK_MESSAGES } from "../config/messages.js";
 import { PURCHASE_INTENT_RULE } from "../config/purchaseIntent.js";
 import { FAQ_RULES } from "../config/rules.js";
 import { matchesAnyPhrase } from "./matcher.js";
 import { tokenize } from "./normalize.js";
 import type { Decision, DecisionContext, ResponseEngine } from "./types.js";
+import { pickRandom } from "./variant.js";
 
 /**
  * Motor de la Fase 1: matching de reglas por palabras clave, sin IA. Implementa
@@ -21,7 +22,7 @@ export class RulesEngine implements ResponseEngine {
     // quiero comprar?" debe derivarse a un vendedor, no responderse como FAQ.
     if (matchesAnyPhrase(tokens, PURCHASE_INTENT_RULE.keywords)) {
       return {
-        respuesta: PURCHASE_INTENT_RULE.response,
+        respuesta: pickRandom(PURCHASE_INTENT_RULE.responses),
         categoria: PURCHASE_INTENT_RULE.category,
         esIntencionCompra: true,
         requiereRevisionHumana: false,
@@ -31,7 +32,7 @@ export class RulesEngine implements ResponseEngine {
     const faqMatch = FAQ_RULES.find((rule) => matchesAnyPhrase(tokens, rule.keywords));
     if (faqMatch) {
       return {
-        respuesta: faqMatch.response,
+        respuesta: pickRandom(faqMatch.responses),
         categoria: faqMatch.category,
         esIntencionCompra: false,
         requiereRevisionHumana: false,
@@ -39,7 +40,7 @@ export class RulesEngine implements ResponseEngine {
     }
 
     return {
-      respuesta: FALLBACK_MESSAGE,
+      respuesta: pickRandom(FALLBACK_MESSAGES),
       categoria: CATEGORY_SIN_MATCH,
       esIntencionCompra: false,
       requiereRevisionHumana: true,

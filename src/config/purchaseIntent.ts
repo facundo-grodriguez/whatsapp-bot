@@ -1,4 +1,4 @@
-import { DERIVATION_MESSAGE } from "./messages.js";
+import { DERIVATION_MESSAGES } from "./messages.js";
 
 /**
  * Palabras/frases que indican intención de compra. Si matchean, el bot deja de
@@ -8,7 +8,7 @@ import { DERIVATION_MESSAGE } from "./messages.js";
 export const PURCHASE_INTENT_RULE = {
   category: "intencion_compra",
   categoryLabel: "Intención de compra",
-  response: DERIVATION_MESSAGE,
+  responses: DERIVATION_MESSAGES,
   keywords: [
     "comprar",
     "quiero comprar",

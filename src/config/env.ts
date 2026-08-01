@@ -13,6 +13,12 @@ const booleanFromEnvString = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
+/** Trata un string vacío como "no seteado", para variables opcionales dejadas en blanco en .env. */
+const optionalNonEmptyString = z.preprocess((value) => {
+  if (value === "") return undefined;
+  return value;
+}, z.string().min(1).optional());
+
 /**
  * Esquema de variables de entorno. Falla rápido y con un mensaje claro si falta
  * algo al arrancar el proceso, en vez de fallar más tarde en un punto oscuro del código.
@@ -31,7 +37,7 @@ const envSchema = z.object({
   WAHA_BASE_URL: z.string().url().default("http://localhost:3000"),
   WAHA_API_KEY: z.string().min(1, "WAHA_API_KEY es requerida"),
   // HMAC del webhook: opcional en desarrollo, pero si está configurada se valida siempre.
-  WAHA_HMAC_KEY: z.string().min(1).optional(),
+  WAHA_HMAC_KEY: optionalNonEmptyString,
   // En dry-run el cliente de WAHA loguea la respuesta en vez de enviarla de verdad.
   // Permite probar todo el flujo sin tener WAHA corriendo.
   WAHA_DRY_RUN: booleanFromEnvString.default(false),

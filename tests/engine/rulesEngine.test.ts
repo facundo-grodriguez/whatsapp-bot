@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { CATEGORY_SIN_MATCH } from "../../src/config/categories.js";
-import { DERIVATION_MESSAGE, FALLBACK_MESSAGE } from "../../src/config/messages.js";
+import { DERIVATION_MESSAGES, FALLBACK_MESSAGES } from "../../src/config/messages.js";
 import { PURCHASE_INTENT_RULE } from "../../src/config/purchaseIntent.js";
+import { FAQ_RULES } from "../../src/config/rules.js";
 import { RulesEngine } from "../../src/engine/rulesEngine.js";
 import type { DecisionContext } from "../../src/engine/types.js";
 
@@ -13,14 +14,16 @@ const baseContext: DecisionContext = {
   history: [],
 };
 
+const horariosRule = FAQ_RULES.find((rule) => rule.category === "horarios")!;
+
 describe("RulesEngine", () => {
   const engine = new RulesEngine();
 
   it("responde una FAQ configurada (horarios)", async () => {
     const decision = await engine.decidirRespuesta("¿cuál es el horario?", baseContext);
 
-    expect(decision).toEqual({
-      respuesta: "Atendemos de lunes a viernes de 9 a 18hs.",
+    expect(horariosRule.responses).toContain(decision.respuesta);
+    expect(decision).toMatchObject({
       categoria: "horarios",
       esIntencionCompra: false,
       requiereRevisionHumana: false,
@@ -30,8 +33,8 @@ describe("RulesEngine", () => {
   it("detecta intención de compra y marca derivación", async () => {
     const decision = await engine.decidirRespuesta("hola, quiero comprar", baseContext);
 
-    expect(decision).toEqual({
-      respuesta: DERIVATION_MESSAGE,
+    expect(DERIVATION_MESSAGES).toContain(decision.respuesta);
+    expect(decision).toMatchObject({
       categoria: PURCHASE_INTENT_RULE.category,
       esIntencionCompra: true,
       requiereRevisionHumana: false,
@@ -50,8 +53,8 @@ describe("RulesEngine", () => {
   it("responde el mensaje genérico y pide revisión humana si no matchea nada", async () => {
     const decision = await engine.decidirRespuesta("asdf qwerty zzz", baseContext);
 
-    expect(decision).toEqual({
-      respuesta: FALLBACK_MESSAGE,
+    expect(FALLBACK_MESSAGES).toContain(decision.respuesta);
+    expect(decision).toMatchObject({
       categoria: CATEGORY_SIN_MATCH,
       esIntencionCompra: false,
       requiereRevisionHumana: true,
@@ -64,6 +67,6 @@ describe("RulesEngine", () => {
       state: "derivada",
     });
 
-    expect(derivada.respuesta).toBe("Atendemos de lunes a viernes de 9 a 18hs.");
+    expect(horariosRule.responses).toContain(derivada.respuesta);
   });
 });

@@ -115,10 +115,12 @@ con el WhatsApp que quieras conectar, y mandale un mensaje desde otro teléfono.
 Todo lo específico del negocio vive en `src/config/`, nunca hardcodeado en la lógica:
 
 - **`src/config/rules.ts`** — FAQs: cada entrada tiene `category`, `categoryLabel`, `keywords`
-  (frases que activan la regla) y `response`. La primera regla que matchea gana.
+  (frases que activan la regla) y `responses` (array de variantes). La primera regla que matchea
+  gana; la respuesta se elige al azar entre las variantes (ver "Anti-ban" más abajo).
 - **`src/config/purchaseIntent.ts`** — palabras/frases que se interpretan como intención de
   compra (derivan la conversación a un vendedor).
-- **`src/config/messages.ts`** — mensaje genérico de fallback y mensaje de derivación.
+- **`src/config/messages.ts`** — variantes del mensaje genérico de fallback y del mensaje de
+  derivación.
 - **`src/config/categories.ts`** — se arma solo a partir de los dos archivos anteriores; no hace
   falta tocarlo salvo que agregues una categoría fuera de una FAQ o de intención de compra.
 
@@ -127,6 +129,65 @@ comparan por secuencia de palabras completas — así `"precio"` no matchea dent
 
 Después de editar las reglas, no hace falta migrar nada: el catálogo de categorías se sincroniza
 solo en cada arranque del servidor.
+
+## Anti-ban (mitigar el riesgo de WAHA)
+
+WAHA se conecta por un protocolo no oficial (ver riesgo documentado en CLAUDE.md), así que el bot
+suma algunas señales para no comportarse como un bot obvio. No elimina el riesgo, lo reduce:
+
+- **Delay aleatorio antes de responder** (`RESPONSE_DELAY_MIN_MS`/`RESPONSE_DELAY_MAX_MS` en
+  `.env`, 1-3s por defecto).
+- **Indicador de "escribiendo…"** durante ese delay (`startTyping`/`stopTyping` en
+  `src/waha/client.ts`), si la instancia de WAHA lo soporta. Es cosmético: si falla, no bloquea el
+  envío del mensaje real.
+- **Variantes de respuesta**: cada FAQ y los mensajes de fallback/derivación tienen más de un texto
+  posible (`src/config/rules.ts`, `src/config/messages.ts`), elegido al azar en cada respuesta
+  (`src/engine/variant.ts`), para no repetir siempre el mismo mensaje exacto ante usuarios
+  distintos.
+
+Fuera del código: usar un número con SIM real (no VoIP) y con historial de uso normal, y responder
+solo a mensajes entrantes (nunca broadcast/outbound) son los factores que más pesan — más que
+cualquiera de los puntos anteriores.
+
+## Fase 2 — multi-sesión
+
+Soportar varios números de WhatsApp (por ejemplo uno para "ventas" y otro para "soporte", o uno
+por cliente) es cuestión de dar de alta sesiones adicionales en WAHA — **no hace falta tocar
+código**. El motor de reglas de la Fase 1 ya se diseñó pensando en esto:
+
+- El webhook (`src/webhook/routes.ts`) lee el nombre de la sesión desde `event.session`, el campo
+  que manda WAHA en cada evento — nunca está hardcodeado a `"default"`.
+- El cliente de WAHA (`src/waha/client.ts`) recibe `session` como parámetro en cada envío, así que
+  responde por la misma sesión de la que vino el mensaje.
+- El modelo de datos (`conversations` en `src/db/schema.ts`) identifica cada conversación por la
+  clave `(sessionName, chatId)`, no solo por `chatId`.
+
+Como consecuencia, si el mismo cliente le escribe al número de "ventas" y al de "soporte", se
+generan dos conversaciones completamente independientes — cada una con su propio estado, sus
+propias respuestas y su propia posible derivación a un vendedor.
+
+Para dar de alta una segunda sesión, repetí el paso 4 de "Cómo ejecutar" (
+[Conectar un número real de WhatsApp](#4-conectar-un-número-real-de-whatsapp)) cambiando el `name`,
+apuntando al **mismo** webhook:
+
+```bash
+curl -X POST http://localhost:3000/api/sessions \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: <tu WAHA_API_KEY>" \
+  -d '{
+    "name": "soporte",
+    "config": {
+      "webhooks": [{ "url": "http://host.docker.internal:3001/webhook/waha", "events": ["message"] }]
+    }
+  }'
+```
+
+Escaneá el QR de esta sesión nueva (`GET /api/soporte/auth/qr`) con el número de WhatsApp que
+corresponda — distinto al de la sesión `default` — y listo: el bot ya responde por ambos números
+en paralelo, sin reiniciar ni redeployar nada.
+
+> La misma nota sobre `host.docker.internal` en Windows/Mac de la sección 4 aplica acá: el webhook
+> de cualquier sesión nueva tiene que apuntar a esa URL, no a `localhost`.
 
 ## Estructura
 

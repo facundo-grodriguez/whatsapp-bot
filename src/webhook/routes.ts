@@ -44,6 +44,16 @@ export async function registerWebhookRoutes(fastify: FastifyInstance): Promise<v
       // Grupos fuera de alcance de la Fase 1 (ver plan de fases).
       return reply.code(200).send({ ignored: true, reason: "group_chat" });
     }
+    if (event.payload.body.trim() === "") {
+      // Al vincular una sesión por primera vez, WAHA reenvía un burst de eventos
+      // "message" con body vacío (sincronización del historial de WhatsApp, no
+      // mensajes nuevos reales) — se confirmó en la práctica: decenas de chats
+      // distintos con el mismo timestamp exacto. Sin este filtro, cada uno
+      // generaba una autorespuesta real a contactos que nunca escribieron nada.
+      // También cubre mensajes de solo-media sin texto: el motor de reglas de la
+      // Fase 1 solo matchea texto, así que no hay nada que responder de todos modos.
+      return reply.code(200).send({ ignored: true, reason: "empty_body" });
+    }
 
     const conversation = await findOrCreateConversation(event.session, event.payload.from);
 

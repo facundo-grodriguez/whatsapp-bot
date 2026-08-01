@@ -1,11 +1,8 @@
 import { env } from "../config/env.js";
-import {
-  getConversationById,
-  setConversationState,
-} from "../db/repositories/conversations.js";
+import { getConversationById, setConversationState } from "../db/repositories/conversations.js";
 import { getConversationHistory, insertOutboundMessage } from "../db/repositories/messages.js";
 import { engine } from "../engine/index.js";
-import { sendText, WahaApiError } from "../waha/client.js";
+import { sendText, startTyping, stopTyping, WahaApiError } from "../waha/client.js";
 import { notifyVendor } from "./notifyVendor.js";
 
 export interface HandleIncomingMessageInput {
@@ -75,7 +72,9 @@ export async function handleIncomingMessage(input: HandleIncomingMessageInput): 
     return;
   }
 
+  await startTyping({ session: input.sessionName, chatId: input.chatId });
   await delay(randomDelayMs());
+  await stopTyping({ session: input.sessionName, chatId: input.chatId });
 
   try {
     await sendText({
@@ -86,7 +85,6 @@ export async function handleIncomingMessage(input: HandleIncomingMessageInput): 
   } catch (error) {
     // No perdemos el mensaje: se persiste igual (con needsHumanReview forzado) para
     // que quede registro de que el bot decidió responder pero el envío falló.
-    // El "modo degradado" completo (reintentos, alertas) es de la Fase 3.
     const reason = error instanceof WahaApiError ? error.message : String(error);
     console.error(`[handleIncomingMessage] falló el envío a WAHA: ${reason}`);
     await insertOutboundMessage({
