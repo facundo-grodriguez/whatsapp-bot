@@ -1,6 +1,6 @@
 export interface NotifyVendorInput {
   conversationId: number;
-  sessionName: string;
+  channelId: string;
   chatId: string;
   body: string;
 }
@@ -13,7 +13,7 @@ export interface NotifyVendorInput {
  */
 export async function notifyVendor(input: NotifyVendorInput): Promise<void> {
   console.log(
-    `[notifyVendor STUB] conversación derivada -> session="${input.sessionName}" ` +
+    `[notifyVendor STUB] conversación derivada -> channelId="${input.channelId}" ` +
       `chatId="${input.chatId}" conversationId=${input.conversationId} mensaje="${input.body}"`,
   );
 }

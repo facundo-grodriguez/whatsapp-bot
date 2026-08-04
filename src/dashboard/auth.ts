@@ -45,7 +45,7 @@ function parseBasicAuthHeader(header: string | undefined): BasicCredentials | nu
 /**
  * preHandler de Fastify que protege el dashboard con HTTP Basic Auth. Se registra
  * únicamente en la ruta del dashboard, nunca como hook global: `/health` debe
- * quedar accesible para un monitor externo y `/webhook/waha` para WAHA.
+ * quedar accesible para un monitor externo y `/webhook/whatsapp` para Meta.
  *
  * Solo se usa cuando DASHBOARD_PASSWORD está configurada; si no lo está, la ruta
  * directamente no se monta (ver src/server.ts).

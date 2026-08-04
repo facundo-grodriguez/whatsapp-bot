@@ -15,8 +15,8 @@ const THROTTLE_WINDOW_MS = 5 * 60 * 1000;
 
 const lastDegradedReplyAt = new Map<string, number>();
 
-function throttleKey(sessionName: string, chatId: string): string {
-  return `${sessionName}:${chatId}`;
+function throttleKey(channelId: string, chatId: string): string {
+  return `${channelId}:${chatId}`;
 }
 
 /**
@@ -24,8 +24,8 @@ function throttleKey(sessionName: string, chatId: string): string {
  * respuesta es `false`, además registra el intento actual (para que la próxima
  * consulta dentro de la ventana sí se frene).
  */
-export function shouldSendDegradedReply(sessionName: string, chatId: string): boolean {
-  const key = throttleKey(sessionName, chatId);
+export function shouldSendDegradedReply(channelId: string, chatId: string): boolean {
+  const key = throttleKey(channelId, chatId);
   const lastSentAt = lastDegradedReplyAt.get(key);
   const now = Date.now();
 

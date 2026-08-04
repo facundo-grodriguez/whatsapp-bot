@@ -1,8 +1,8 @@
-import { and, eq, exists, gte, lte, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gte, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 
 import { db } from "../client.js";
-import { conversations, messages } from "../schema.js";
+import { type ConversationState, conversations, messages } from "../schema.js";
 
 /**
  * Filtros comunes a todas las agregaciones del dashboard. Todos opcionales:
@@ -11,7 +11,7 @@ import { conversations, messages } from "../schema.js";
 export interface StatsFilters {
   from?: Date;
   to?: Date;
-  sessionName?: string;
+  channelId?: string;
 }
 
 /** Condiciones de rango de fecha sobre una columna `created_at` cualquiera. */
@@ -48,7 +48,7 @@ export async function getResponseCountByCategory(
     .where(
       and(
         eq(messages.direction, "outbound"),
-        filters.sessionName ? eq(conversations.sessionName, filters.sessionName) : undefined,
+        filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined,
         ...dateRangeConditions(messages.createdAt, filters),
       ),
     )
@@ -65,23 +65,38 @@ export interface ConversationOutcomes {
   total: number;
   derivadas: number;
   resueltasPorBot: number;
-  necesitaHumano: number;
+  sinResolverPorBot: number;
 }
 
 /**
  * Clasifica cada conversación en exactamente uno de tres resultados posibles.
  *
- * La distinción entre `resueltasPorBot` y `necesitaHumano` es la parte importante:
+ * La distinción entre `resueltasPorBot` y `sinResolverPorBot` es la parte importante:
  * una conversación donde el bot solo contestó el mensaje genérico de fallback NO
  * está resuelta — quedó esperando que la mire una persona. Contarla como resuelta
  * infla el número que se le muestra al cliente. `needs_human_review` existe en el
- * schema desde la Fase 1 exactamente para poder separarlas.
+ * schema desde la Fase 1 exactamente para poder separarlas. (Se llamaba
+ * `necesitaHumano`; se renombró porque el nombre chocaba visualmente con
+ * "Pendientes por responder" del dashboard, dando la falsa impresión de que debían
+ * sumar lo mismo — ver nota en `renderDetailOutcomes`.)
+ *
+ * Excluye conversaciones sin ningún mensaje (`hasAnyMessage`): pueden existir si
+ * `findOrCreateConversation` corrió pero la inserción del mensaje que le seguía
+ * falló o se interrumpió después — sin esto, esas conversaciones "fantasma"
+ * inflaban `total` y `sinResolverPorBot` sin que hubiera nada real que revisar
+ * (se detectaron 4 en la base de desarrollo, todas artefactos de pruebas manuales
+ * con timestamps inválidos, no tráfico real).
  */
 export async function getConversationOutcomes(
   filters: StatsFilters = {},
 ): Promise<ConversationOutcomes> {
+  const hasAnyMessage = exists(
+    db.select({ one: sql`1` }).from(messages).where(eq(messages.conversationId, conversations.id)),
+  );
+
   const conversationFilter = and(
-    filters.sessionName ? eq(conversations.sessionName, filters.sessionName) : undefined,
+    hasAnyMessage,
+    filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined,
     filters.from ? gte(conversations.createdAt, filters.from) : undefined,
     filters.to ? lte(conversations.createdAt, filters.to) : undefined,
   );
@@ -106,7 +121,7 @@ export async function getConversationOutcomes(
       total: sql<number>`count(*)`,
       derivadas: sql<number>`sum(case when ${conversations.state} = 'derivada' then 1 else 0 end)`,
       resueltasPorBot: sql<number>`sum(case when ${conversations.state} != 'derivada' and ${hasRealAnswer} then 1 else 0 end)`,
-      necesitaHumano: sql<number>`sum(case when ${conversations.state} != 'derivada' and not ${hasRealAnswer} then 1 else 0 end)`,
+      sinResolverPorBot: sql<number>`sum(case when ${conversations.state} != 'derivada' and not ${hasRealAnswer} then 1 else 0 end)`,
     })
     .from(conversations)
     .where(conversationFilter);
@@ -115,15 +130,16 @@ export async function getConversationOutcomes(
     total: Number(row?.total ?? 0),
     derivadas: Number(row?.derivadas ?? 0),
     resueltasPorBot: Number(row?.resueltasPorBot ?? 0),
-    necesitaHumano: Number(row?.necesitaHumano ?? 0),
+    sinResolverPorBot: Number(row?.sinResolverPorBot ?? 0),
   };
 }
 
 /**
  * Tiempo promedio (ms) entre que entra un mensaje y sale su respuesta.
  *
- * OJO al interpretarlo: este número está dominado por el delay aleatorio
- * anti-ban de 1-3s (RESPONSE_DELAY_MIN_MS/MAX_MS), no por el tiempo de
+ * OJO al interpretarlo: incluye el delay configurable antes de responder
+ * (RESPONSE_DELAY_MIN_MS/MAX_MS, default 0 desde la Fase 5 — ya no es una
+ * mitigación anti-ban como con WAHA, ver CLAUDE.md §2), no solo el tiempo de
  * procesamiento. Es válido como latencia percibida por el cliente, pero no como
  * medida de rendimiento interno del bot.
  *
@@ -142,7 +158,7 @@ export async function getAvgResponseTimeMs(filters: StatsFilters = {}): Promise<
     .where(
       and(
         eq(messages.direction, "outbound"),
-        filters.sessionName ? eq(conversations.sessionName, filters.sessionName) : undefined,
+        filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined,
         ...dateRangeConditions(messages.createdAt, filters),
       ),
     );
@@ -152,18 +168,115 @@ export async function getAvgResponseTimeMs(filters: StatsFilters = {}): Promise<
 }
 
 /**
- * Cantidad de mensajes marcados para revisión humana. Es la métrica más
- * accionable del set: dice cuántas consultas están esperando que alguien las mire.
+ * Un mensaje "necesita revisión" por dos motivos posibles, distinguibles por
+ * `category` en la fila:
+ * - `needsHumanReview`: el bot no supo responder (fallback genérico).
+ * - `isPurchaseIntent`: el bot sí respondió (avisó que deriva a ventas), pero
+ *   igual queda un lead esperando seguimiento humano — hoy `notifyVendor()` es
+ *   un stub que solo loguea, así que sin esto esos leads eran invisibles.
  */
-export async function getNeedsHumanReviewCount(filters: StatsFilters = {}): Promise<number> {
+function needsReviewCondition() {
+  return or(eq(messages.needsHumanReview, true), eq(messages.isPurchaseIntent, true));
+}
+
+export interface PendingReviewItem {
+  /** Id del mensaje saliente (el que tiene needsHumanReview/isPurchaseIntent), no
+   *  del mensaje del cliente. Es lo que identifica la fila al marcarla como atendida. */
+  id: number;
+  /** Momento en que llegó el mensaje del cliente (no el de la respuesta del bot). */
+  createdAt: Date;
+  channelId: string;
+  chatId: string;
+  category: string;
+  /** Texto del mensaje del cliente que quedó sin resolver — el contexto para retomarlo. */
+  clientMessage: string;
+  /** Id de la conversación — lo que necesita el botón "Reactivar bot". */
+  conversationId: number;
+  /** Si es "derivada", el dashboard muestra el botón "Reactivar bot" en esta fila. */
+  conversationState: ConversationState;
+  /** Nombre de perfil de WhatsApp del contacto, si Meta lo mandó alguna vez. `null` = mostrar el número. */
+  senderName: string | null;
+  /** Último acuse de estado de la respuesta del bot (sent/delivered/read/failed). `null` = todavía sin acuse. */
+  deliveryStatus: string | null;
+}
+
+/**
+ * Mensajes puntuales que necesitan que alguien haga algo, con el contexto para
+ * retomarlos (no solo el número: el texto del cliente, el canal y un link al chat).
+ * Sin esto, la única forma de encontrarlos era ir chat por chat en WhatsApp. La card
+ * "Mensajes a revisar" del dashboard usa `.length` de este mismo resultado, para que
+ * nunca pueda desincronizarse del número de filas que se ven en la tabla.
+ *
+ * Excluye los que ya se marcaron como atendidos (`reviewedAt` no nulo) — ver
+ * `markMessageAsReviewed` en `db/repositories/messages.ts` y `getResolvedReviewCount`
+ * más abajo, su contraparte.
+ *
+ * Ordenado del más viejo al más nuevo (cola FIFO): lo que lleva más tiempo
+ * esperando aparece primero, para que nada quede olvidado.
+ */
+export async function getPendingReviewMessages(
+  filters: StatsFilters = {},
+): Promise<PendingReviewItem[]> {
+  const inbound = alias(messages, "inbound");
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      createdAt: inbound.createdAt,
+      channelId: conversations.channelId,
+      chatId: conversations.chatId,
+      category: messages.category,
+      clientMessage: inbound.body,
+      conversationId: conversations.id,
+      conversationState: conversations.state,
+      senderName: conversations.senderName,
+      deliveryStatus: messages.deliveryStatus,
+    })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .innerJoin(inbound, eq(inbound.id, messages.inReplyToId))
+    .where(
+      and(
+        needsReviewCondition(),
+        isNull(messages.reviewedAt),
+        filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined,
+        ...dateRangeConditions(messages.createdAt, filters),
+      ),
+    )
+    .orderBy(inbound.createdAt)
+    .limit(200);
+
+  return rows.map((row) => ({
+    id: row.id,
+    createdAt: row.createdAt,
+    channelId: row.channelId,
+    chatId: row.chatId,
+    category: row.category ?? "sin_categoria",
+    clientMessage: row.clientMessage,
+    conversationId: row.conversationId,
+    conversationState: row.conversationState,
+    senderName: row.senderName,
+    deliveryStatus: row.deliveryStatus,
+  }));
+}
+
+/**
+ * Cuántos mensajes se marcaron como atendidos manualmente desde el dashboard
+ * (`reviewedAt` no nulo), dentro del mismo universo que `getPendingReviewMessages`
+ * (mismo filtro de fecha/canal). Es el contador "Resueltas" que se muestra al lado
+ * de "Mensajes a revisar", para tener una noción de cuánto se está resolviendo, no
+ * solo cuánto queda pendiente.
+ */
+export async function getResolvedReviewCount(filters: StatsFilters = {}): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)` })
     .from(messages)
     .innerJoin(conversations, eq(conversations.id, messages.conversationId))
     .where(
       and(
-        eq(messages.needsHumanReview, true),
-        filters.sessionName ? eq(conversations.sessionName, filters.sessionName) : undefined,
+        needsReviewCondition(),
+        isNotNull(messages.reviewedAt),
+        filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined,
         ...dateRangeConditions(messages.createdAt, filters),
       ),
     );
@@ -171,17 +284,91 @@ export async function getNeedsHumanReviewCount(filters: StatsFilters = {}): Prom
   return Number(row?.count ?? 0);
 }
 
-export interface SessionCount {
-  sessionName: string;
+export interface ResolvedReviewItem {
+  id: number;
+  /** Cuándo se marcó como atendido (`reviewedAt`), no cuándo llegó el mensaje. */
+  reviewedAt: Date;
+  channelId: string;
+  chatId: string;
+  category: string;
+  clientMessage: string;
+  senderName: string | null;
+  deliveryStatus: string | null;
+}
+
+const RECENTLY_RESOLVED_LIMIT = 20;
+
+/**
+ * Últimas resoluciones manuales, para el botón "Reabrir" (contraparte de
+ * `markMessageAsReviewed`/`getPendingReviewMessages`). Sin esto no había forma de
+ * deshacer un click apurado: la fila desaparecía de "Pendientes de revisión" para
+ * siempre. Limitado a las últimas 20 a propósito — es para corregir un error
+ * reciente, no un historial completo; para eso ya está "Resueltas manualmente"
+ * (el conteo) y, más abajo, "Resultados" en Detalle. Siempre las más nuevas
+ * primero (orden inverso al de `getPendingReviewMessages`): lo más probable que
+ * alguien quiera reabrir es lo que acaba de marcar, no algo de hace días.
+ */
+export async function getRecentlyResolvedMessages(): Promise<ResolvedReviewItem[]> {
+  const inbound = alias(messages, "inbound");
+
+  const rows = await db
+    .select({
+      id: messages.id,
+      reviewedAt: messages.reviewedAt,
+      channelId: conversations.channelId,
+      chatId: conversations.chatId,
+      category: messages.category,
+      clientMessage: inbound.body,
+      senderName: conversations.senderName,
+      deliveryStatus: messages.deliveryStatus,
+    })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .innerJoin(inbound, eq(inbound.id, messages.inReplyToId))
+    .where(and(needsReviewCondition(), isNotNull(messages.reviewedAt)))
+    .orderBy(desc(messages.reviewedAt))
+    .limit(RECENTLY_RESOLVED_LIMIT);
+
+  return rows.map((row) => ({
+    id: row.id,
+    // isNotNull(messages.reviewedAt) en el where garantiza que nunca es null acá.
+    reviewedAt: row.reviewedAt as Date,
+    channelId: row.channelId,
+    chatId: row.chatId,
+    category: row.category ?? "sin_categoria",
+    clientMessage: row.clientMessage,
+    senderName: row.senderName,
+    deliveryStatus: row.deliveryStatus,
+  }));
+}
+
+/**
+ * Cuántos `channelId` distintos tuvieron alguna conversación, sin filtro de
+ * fecha ni de canal. Se usa para decidir si vale la pena mostrar "Volumen por
+ * canal" en el dashboard — con un solo número de WhatsApp Business esa
+ * comparación no aporta nada, solo ruido (ver renderDashboard). A propósito
+ * sin filtro de fecha: si el negocio alguna vez usó 2+ canales, la sección debe
+ * seguir apareciendo aunque el rango filtrado de hoy solo tenga uno.
+ */
+export async function getActiveChannelCount(): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(distinct ${conversations.channelId})` })
+    .from(conversations);
+
+  return Number(row?.count ?? 0);
+}
+
+export interface ChannelCount {
+  channelId: string;
   conversations: number;
   messages: number;
 }
 
-/** Volumen por sesión de WhatsApp (útil recién cuando hay más de un número). */
-export async function getVolumeBySession(filters: StatsFilters = {}): Promise<SessionCount[]> {
+/** Volumen por canal de WhatsApp (útil recién cuando hay más de un número de negocio). */
+export async function getVolumeByChannel(filters: StatsFilters = {}): Promise<ChannelCount[]> {
   const rows = await db
     .select({
-      sessionName: conversations.sessionName,
+      channelId: conversations.channelId,
       conversations: sql<number>`count(distinct ${conversations.id})`,
       messages: sql<number>`count(${messages.id})`,
     })
@@ -193,12 +380,12 @@ export async function getVolumeBySession(filters: StatsFilters = {}): Promise<Se
         ...dateRangeConditions(messages.createdAt, filters),
       ),
     )
-    .where(filters.sessionName ? eq(conversations.sessionName, filters.sessionName) : undefined)
-    .groupBy(conversations.sessionName)
+    .where(filters.channelId ? eq(conversations.channelId, filters.channelId) : undefined)
+    .groupBy(conversations.channelId)
     .orderBy(sql`count(${messages.id}) desc`);
 
   return rows.map((row) => ({
-    sessionName: row.sessionName,
+    channelId: row.channelId,
     conversations: Number(row.conversations),
     messages: Number(row.messages),
   }));

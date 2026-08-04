@@ -1,7 +1,7 @@
 {
   "name": "whatsapp-bot",
   "version": "0.1.0",
-  "description": "Asistente de WhatsApp para atencion al primer contacto (Fase 1: motor de reglas)",
+  "description": "Asistente de WhatsApp para atencion al primer contacto (motor de reglas + IA como fallback)",
   "type": "module",
   "private": true,
   "engines": {
@@ -16,10 +16,13 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file=.env src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
-    "simulate": "node scripts/simulate-message.mjs"
+    "db:backup": "node --env-file=.env scripts/backup-db.mjs",
+    "simulate": "node --env-file=.env scripts/simulate-message.mjs"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.27",
     "@libsql/client": "^0.17.4",
+    "ai": "^7.0.47",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.11.0",
     "p-queue": "^9.3.3",

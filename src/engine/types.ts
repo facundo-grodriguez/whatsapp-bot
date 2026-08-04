@@ -8,7 +8,7 @@
  * 1. `decidirRespuesta` es async aunque el motor de reglas sea síncrono por dentro.
  * 2. El motor NO tiene efectos secundarios: no envía mensajes, no escribe en la
  *    base, no notifica al vendedor. Solo devuelve una decisión.
- * 3. Este archivo no importa nada de `db/` ni de `waha/` — el motor debe poder
+ * 3. Este archivo no importa nada de `db/` ni de `messaging/` — el motor debe poder
  *    testearse y reemplazarse sin conocer cómo se persisten los datos ni cómo se
  *    envían los mensajes.
  */
@@ -24,7 +24,7 @@ export interface HistoryMessage {
 }
 
 export interface DecisionContext {
-  sessionName: string;
+  channelId: string;
   chatId: string;
   state: ConversationState;
   /** Vacío en la Fase 1. El motor de IA de la Fase 4 lo va a necesitar para dar contexto al LLM. */

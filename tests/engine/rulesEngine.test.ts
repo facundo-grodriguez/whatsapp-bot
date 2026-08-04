@@ -8,7 +8,7 @@ import { RulesEngine } from "../../src/engine/rulesEngine.js";
 import type { DecisionContext } from "../../src/engine/types.js";
 
 const baseContext: DecisionContext = {
-  sessionName: "default",
+  channelId: "default",
   chatId: "5491111111111@c.us",
   state: "activa",
   history: [],

@@ -9,9 +9,12 @@ export interface FaqRule {
 }
 
 /**
- * FAQs de ejemplo del negocio. Para cargar las propias: agregar/editar entradas
- * acá (ver instrucciones en README.md). El orden importa: la primera regla que
- * matchea gana.
+ * FAQs de PrintLab 3D (impresión 3D), cargadas el 2026-08-04 para que el usuario
+ * pruebe el bot con un rubro real en vez de las FAQs de ejemplo genéricas de las
+ * Fases 1-5. Sigue siendo contenido de prueba/demo (no un negocio real todavía),
+ * pero ya específico del rubro — reemplazar por las FAQs reales del negocio
+ * cuando existan (ver instrucciones en README.md). El orden importa: la primera
+ * regla que matchea gana.
  */
 export const FAQ_RULES: FaqRule[] = [
   {
@@ -19,24 +22,65 @@ export const FAQ_RULES: FaqRule[] = [
     categoryLabel: "Horarios de atención",
     keywords: ["horario", "horarios", "a que hora abren", "atienden"],
     responses: [
-      "Atendemos de lunes a viernes de 9 a 18hs.",
-      "Nuestro horario de atención es de lunes a viernes, de 9 a 18hs.",
+      "Trabajamos de lunes a viernes de 10 a 19hs, y sábados de 10 a 14hs.",
+      "Nuestro horario es de lunes a viernes de 10 a 19hs, y los sábados de 10 a 14hs.",
     ],
   },
   {
     category: "ubicacion",
     categoryLabel: "Ubicación",
-    keywords: ["donde estan", "donde quedan", "direccion", "ubicacion"],
+    keywords: ["donde estan", "donde queda", "direccion", "ubicacion"],
     responses: [
-      "Estamos en Av. Siempre Viva 742. Nos encontrás en Google Maps buscando nuestro nombre.",
-      "Nuestra dirección es Av. Siempre Viva 742. También nos ubicás por Google Maps.",
+      "Estamos en Av. Rivadavia 4820. Podés retirar tu pedido ahí o coordinamos el envío.",
+      "Nuestro taller está en Av. Rivadavia 4820 — retiro en el local o te lo mandamos por correo.",
+    ],
+  },
+  {
+    category: "materiales",
+    categoryLabel: "Materiales",
+    keywords: [
+      "en que material imprimen",
+      "trabajan con resina",
+      "tienen filamento",
+      "que materiales usan",
+      "imprimen en pla",
+    ],
+    responses: [
+      "Imprimimos en PLA, PETG y resina, en varios colores. Contanos qué pieza necesitás y te decimos cuál conviene.",
+      "Trabajamos con PLA, PETG y resina. El material ideal depende de la pieza — preguntanos y te asesoramos.",
+    ],
+  },
+  {
+    category: "archivos",
+    categoryLabel: "Formatos de archivo",
+    keywords: [
+      "que formato de archivo",
+      "aceptan stl",
+      "mandan el diseño en obj",
+      "no tengo el diseño",
+    ],
+    responses: [
+      "Aceptamos archivos STL y OBJ. Si no tenés el diseño, también podemos ayudarte a modelarlo.",
+      "Podés mandarnos el archivo en STL u OBJ. Si no tenés el modelo 3D todavía, lo armamos nosotros.",
+    ],
+  },
+  {
+    category: "tiempos_entrega",
+    categoryLabel: "Tiempos de entrega",
+    keywords: ["cuanto tarda", "en cuanto tiempo esta lista", "tiempo de entrega"],
+    responses: [
+      "Depende del tamaño de la pieza, pero la mayoría de los trabajos están listos en 2 a 4 días hábiles.",
+      "El tiempo varía según la pieza — en general entregamos entre 2 y 4 días hábiles.",
     ],
   },
   {
     category: "envios",
     categoryLabel: "Envíos",
-    keywords: ["hacen envios", "envian", "delivery", "mandan a domicilio"],
-    responses: ["Sí, hacemos envíos a todo el país.", "Sí, enviamos a todo el país."],
+    keywords: ["hacen envios", "envian", "mandan a domicilio"],
+    responses: [
+      "Sí, mandamos por correo a todo el país.",
+      "Sí, hacemos envíos a todo el país por correo.",
+    ],
   },
   {
     category: "metodos_pago",

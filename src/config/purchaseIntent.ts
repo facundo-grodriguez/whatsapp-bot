@@ -17,5 +17,11 @@ export const PURCHASE_INTENT_RULE = {
     "cuanto sale",
     "como pago",
     "quiero hacer un pedido",
+    // Sumadas 2026-08-04 para PrintLab 3D: "cotizar" es como naturalmente pide
+    // presupuesto un cliente de impresión 3D, no está cubierto por las frases
+    // genéricas de arriba.
+    "cotizar",
+    "quiero cotizar",
+    "cuanto cuesta",
   ],
 };

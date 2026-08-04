@@ -4,20 +4,30 @@ import { DEGRADED_MODE_MESSAGE } from "../config/messages.js";
 import { getConversationById, setConversationState } from "../db/repositories/conversations.js";
 import { getConversationHistory, insertOutboundMessage } from "../db/repositories/messages.js";
 import { engine } from "../engine/index.js";
-import { sendText, startTyping, stopTyping, WahaApiError } from "../waha/client.js";
+import { MessagingError, messaging, type SendTextInput, type SendTextResult } from "../messaging/index.js";
 import { shouldSendDegradedReply } from "./degradedMode.js";
 import { notifyVendor } from "./notifyVendor.js";
 
 export interface HandleIncomingMessageInput {
   conversationId: number;
-  sessionName: string;
+  channelId: string;
   chatId: string;
   /** Id del mensaje inbound ya persistido; se usa como in_reply_to_id de la respuesta. */
   inboundMessageId: number;
+  /** Id del mensaje entrante del lado del proveedor — necesario para marcarlo
+   *  como leído (ver messaging.markReadAndTyping). */
+  providerMessageId: string;
   body: string;
 }
 
 const HISTORY_LIMIT = 20;
+
+// Reintentos ante una falla puntual del proveedor de mensajería (ej. blip de
+// red, error 5xx transitorio) antes de resignarse y marcar needsHumanReview.
+// Backoff corto y acotado: no tiene sentido reintentar por más de unos segundos,
+// y no queremos retener la conversación en la cola (ver src/queue/messageQueue.ts)
+// más de lo necesario.
+const SEND_RETRY_DELAYS_MS = [1000, 2000];
 
 function randomDelayMs(): number {
   const { RESPONSE_DELAY_MIN_MS: min, RESPONSE_DELAY_MAX_MS: max } = env;
@@ -26,6 +36,34 @@ function randomDelayMs(): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Envuelve `messaging.sendText` con reintentos ante error (1 intento inicial +
+ * los backoffs de `SEND_RETRY_DELAYS_MS`). Corta antes si el error viene
+ * marcado `retryable: false` (ej. token vencido, ventana de 24h cerrada — ver
+ * src/messaging/cloudApi/errorCodes.ts): insistir con esos no cambia el
+ * resultado, solo gasta tiempo de cola. Si se agotan los reintentos (o el
+ * error no es reintentable), se propaga tal cual para que el llamador lo trate
+ * igual que antes (mensaje persistido con `needsHumanReview: true`).
+ */
+async function sendTextWithRetry(input: SendTextInput): Promise<SendTextResult> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await messaging.sendText(input);
+    } catch (error) {
+      const retryable = !(error instanceof MessagingError) || error.retryable;
+      if (!retryable || attempt >= SEND_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      console.warn(
+        `[handleIncomingMessage] falló el envío (intento ${attempt + 1}), reintentando: ${
+          error instanceof MessagingError ? error.message : String(error)
+        }`,
+      );
+      await delay(SEND_RETRY_DELAYS_MS[attempt]!);
+    }
+  }
 }
 
 /**
@@ -69,7 +107,7 @@ async function processIncomingMessage(input: HandleIncomingMessageInput): Promis
   const recentHistory = await getConversationHistory(input.conversationId, HISTORY_LIMIT);
 
   const decision = await engine.decidirRespuesta(input.body, {
-    sessionName: input.sessionName,
+    channelId: input.channelId,
     chatId: input.chatId,
     state: conversation.state,
     history: recentHistory
@@ -81,7 +119,7 @@ async function processIncomingMessage(input: HandleIncomingMessageInput): Promis
     await setConversationState(input.conversationId, "derivada");
     await notifyVendor({
       conversationId: input.conversationId,
-      sessionName: input.sessionName,
+      channelId: input.channelId,
       chatId: input.chatId,
       body: input.body,
     });
@@ -91,21 +129,28 @@ async function processIncomingMessage(input: HandleIncomingMessageInput): Promis
     return;
   }
 
-  await startTyping({ session: input.sessionName, chatId: input.chatId });
+  // Una sola llamada: la Cloud API no tiene "stopTyping", el indicador se apaga
+  // solo al llegar el mensaje real (o a los 25s) — ver messaging/types.ts.
+  await messaging.markReadAndTyping({
+    channelId: input.channelId,
+    providerMessageId: input.providerMessageId,
+    showTyping: true,
+  });
   await delay(randomDelayMs());
-  await stopTyping({ session: input.sessionName, chatId: input.chatId });
 
+  let sendResult: SendTextResult;
   try {
-    await sendText({
-      session: input.sessionName,
+    sendResult = await sendTextWithRetry({
+      channelId: input.channelId,
       chatId: input.chatId,
       text: decision.respuesta,
     });
   } catch (error) {
-    // No perdemos el mensaje: se persiste igual (con needsHumanReview forzado) para
-    // que quede registro de que el bot decidió responder pero el envío falló.
-    const reason = error instanceof WahaApiError ? error.message : String(error);
-    console.error(`[handleIncomingMessage] falló el envío a WAHA: ${reason}`);
+    // Se agotaron los reintentos (ver sendTextWithRetry). No perdemos el mensaje:
+    // se persiste igual (con needsHumanReview forzado) para que quede registro de
+    // que el bot decidió responder pero el envío falló.
+    const reason = error instanceof MessagingError ? error.message : String(error);
+    console.error(`[handleIncomingMessage] falló el envío tras reintentar: ${reason}`);
     await insertOutboundMessage({
       conversationId: input.conversationId,
       body: decision.respuesta,
@@ -124,6 +169,7 @@ async function processIncomingMessage(input: HandleIncomingMessageInput): Promis
     isPurchaseIntent: decision.esIntencionCompra,
     needsHumanReview: decision.requiereRevisionHumana,
     inReplyToId: input.inboundMessageId,
+    providerMessageId: sendResult.providerMessageId,
   });
 }
 
@@ -134,22 +180,23 @@ async function processIncomingMessage(input: HandleIncomingMessageInput): Promis
  * no debe impedir el intento de persistir, y viceversa.
  */
 async function sendDegradedReply(input: HandleIncomingMessageInput): Promise<void> {
-  if (!shouldSendDegradedReply(input.sessionName, input.chatId)) {
+  if (!shouldSendDegradedReply(input.channelId, input.chatId)) {
     console.warn(
       `[degradedMode] throttled, no se reenvía el mensaje de resguardo a ` +
-        `${input.sessionName}:${input.chatId}`,
+        `${input.channelId}:${input.chatId}`,
     );
     return;
   }
 
+  let sendResult: SendTextResult | null = null;
   try {
-    await sendText({
-      session: input.sessionName,
+    sendResult = await messaging.sendText({
+      channelId: input.channelId,
       chatId: input.chatId,
       text: DEGRADED_MODE_MESSAGE,
     });
   } catch (error) {
-    // Si WAHA también está caído, no hay más nada por hacer del lado del envío.
+    // Si el proveedor también está caído, no hay más nada por hacer del lado del envío.
     console.error("[degradedMode] no se pudo enviar el mensaje de resguardo:", error);
   }
 
@@ -161,6 +208,7 @@ async function sendDegradedReply(input: HandleIncomingMessageInput): Promise<voi
       isPurchaseIntent: false,
       needsHumanReview: true,
       inReplyToId: input.inboundMessageId,
+      providerMessageId: sendResult?.providerMessageId ?? null,
     });
   } catch (error) {
     // La base puede ser justamente lo que está fallando. Ya se intentó lo más

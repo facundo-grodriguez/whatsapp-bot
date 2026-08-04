@@ -1,91 +1,118 @@
 import type { FastifyInstance } from "fastify";
 
+import { env } from "../config/env.js";
 import { handleIncomingMessage } from "../conversation/handleIncomingMessage.js";
 import { findOrCreateConversation } from "../db/repositories/conversations.js";
-import { insertInboundMessageIfNew } from "../db/repositories/messages.js";
+import { insertInboundMessageIfNew, updateDeliveryStatus } from "../db/repositories/messages.js";
+import { messaging } from "../messaging/index.js";
 import { enqueueMessageProcessing } from "../queue/messageQueue.js";
-import { wahaWebhookEventSchema } from "../waha/types.js";
-import { verifyWahaHmac } from "./hmac.js";
 
-const GROUP_CHAT_SUFFIX = "@g.us";
+interface VerifyQuerystring {
+  "hub.mode"?: string;
+  "hub.verify_token"?: string;
+  "hub.challenge"?: string;
+}
 
 export async function registerWebhookRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.post("/webhook/waha", async (request, reply) => {
-    const signatureHeader = request.headers["x-webhook-hmac"];
-    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
-    // Si por algún motivo no se capturó el body crudo (content-type distinto de
-    // application/json), se verifica sobre el JSON re-serializado: sigue siendo
-    // mejor que no verificar nada, aunque en el caso normal rawBody siempre está.
-    const rawBody = request.rawBody ?? Buffer.from(JSON.stringify(request.body ?? {}));
+  /**
+   * Verificación del webhook (sin equivalente en WAHA): Meta la dispara una
+   * sola vez, al cargar la Callback URL en el App Dashboard, para confirmar que
+   * el endpoint es tuyo. Responde con el `hub.challenge` tal cual, como texto
+   * plano — no JSON — solo si el token coincide con META_VERIFY_TOKEN.
+   */
+  fastify.get<{ Querystring: VerifyQuerystring }>("/webhook/whatsapp", async (request, reply) => {
+    const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = request.query;
 
-    if (!verifyWahaHmac(rawBody, signature)) {
-      request.log.warn("Firma HMAC inválida en el webhook de WAHA, se rechaza");
+    if (mode === "subscribe" && token && env.META_VERIFY_TOKEN && token === env.META_VERIFY_TOKEN) {
+      return reply.code(200).type("text/plain").send(challenge ?? "");
+    }
+
+    request.log.warn("Verificación de webhook de Meta rechazada (token no coincide)");
+    return reply.code(403).send();
+  });
+
+  fastify.post("/webhook/whatsapp", async (request, reply) => {
+    const signatureHeader = request.headers["x-hub-signature-256"];
+    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+
+    if (!request.rawBody) {
+      // A diferencia de WAHA, acá no hay fallback razonable: Meta firma los
+      // bytes EXACTOS del body, así que un JSON re-serializado nunca va a
+      // coincidir con la firma — mejor un motivo explícito que un 401 opaco.
+      request.log.error("No se capturó el body crudo del webhook, no se puede verificar la firma");
+      return reply.code(200).send({ ignored: true, reason: "missing_raw_body" });
+    }
+
+    if (!messaging.verifyWebhookSignature(request.rawBody, signature)) {
+      request.log.warn("Firma inválida en el webhook de WhatsApp, se rechaza");
+      // 401 a propósito (no 200): una firma que falla siempre significa
+      // META_APP_SECRET mal configurado — conviene que Meta reintente y que
+      // quede ruidoso en vez de tragárselo en silencio.
       return reply.code(401).send({ error: "invalid_signature" });
     }
 
-    const parsed = wahaWebhookEventSchema.safeParse(request.body);
-    if (!parsed.success) {
-      request.log.warn({ issues: parsed.error.issues }, "Payload de webhook de WAHA inválido");
-      // 200 igual: si devolviéramos error, WAHA reintentaría un payload que
-      // nunca va a pasar a ser válido.
-      return reply.code(200).send({ ignored: true, reason: "invalid_payload" });
+    const parsed = messaging.parseWebhook(request.body);
+
+    if (parsed.ignored.length > 0) {
+      request.log.info({ ignored: parsed.ignored }, "Entradas del webhook descartadas");
+    }
+    for (const status of parsed.statuses) {
+      if (status.status === "failed") {
+        request.log.warn(
+          { providerMessageId: status.providerMessageId, code: status.errorCode, title: status.errorTitle },
+          "Meta reportó que un mensaje saliente falló",
+        );
+      }
+      // Best-effort: si no matchea ningún mensaje (ver updateDeliveryStatus), no
+      // pasa nada — el webhook igual tiene que responder 200 por el resto del lote.
+      await updateDeliveryStatus(status.providerMessageId, status.status);
     }
 
-    const event = parsed.data;
+    let accepted = 0;
+    let duplicates = 0;
 
-    if (event.event !== "message") {
-      return reply.code(200).send({ ignored: true, reason: "not_a_message_event" });
-    }
-    if (event.payload.fromMe) {
-      // Sin este filtro el bot terminaría respondiéndose a sí mismo en loop.
-      return reply.code(200).send({ ignored: true, reason: "from_me" });
-    }
-    if (event.payload.from.endsWith(GROUP_CHAT_SUFFIX)) {
-      // Grupos fuera de alcance de la Fase 1 (ver plan de fases).
-      return reply.code(200).send({ ignored: true, reason: "group_chat" });
-    }
-    if (event.payload.body.trim() === "") {
-      // Al vincular una sesión por primera vez, WAHA reenvía un burst de eventos
-      // "message" con body vacío (sincronización del historial de WhatsApp, no
-      // mensajes nuevos reales) — se confirmó en la práctica: decenas de chats
-      // distintos con el mismo timestamp exacto. Sin este filtro, cada uno
-      // generaba una autorespuesta real a contactos que nunca escribieron nada.
-      // También cubre mensajes de solo-media sin texto: el motor de reglas de la
-      // Fase 1 solo matchea texto, así que no hay nada que responder de todos modos.
-      return reply.code(200).send({ ignored: true, reason: "empty_body" });
-    }
+    for (const message of parsed.messages) {
+      const conversation = await findOrCreateConversation(
+        message.channelId,
+        message.chatId,
+        message.senderName,
+      );
 
-    const conversation = await findOrCreateConversation(event.session, event.payload.from);
-
-    const waTimestamp = Number.isFinite(event.payload.timestamp)
-      ? new Date(event.payload.timestamp * 1000)
-      : null;
-
-    const inboundMessage = await insertInboundMessageIfNew({
-      conversationId: conversation.id,
-      wahaMessageId: event.payload.id,
-      body: event.payload.body,
-      waTimestamp,
-    });
-
-    if (!inboundMessage) {
-      // WAHA reintentó un webhook que ya habíamos procesado: idempotente, no se re-encola.
-      return reply.code(200).send({ ignored: true, reason: "duplicate_message" });
-    }
-
-    // Sin await a propósito: el procesamiento (decidir respuesta, enviar,
-    // persistir) pasa a la cola y el webhook responde 200 de inmediato, antes de
-    // que WAHA lo reintente por timeout.
-    enqueueMessageProcessing(() =>
-      handleIncomingMessage({
+      const inboundMessage = await insertInboundMessageIfNew({
         conversationId: conversation.id,
-        sessionName: event.session,
-        chatId: event.payload.from,
-        inboundMessageId: inboundMessage.id,
-        body: inboundMessage.body,
-      }),
-    );
+        providerMessageId: message.providerMessageId,
+        body: message.body,
+        waTimestamp: message.timestamp,
+      });
 
-    return reply.code(200).send({ ok: true });
+      if (!inboundMessage) {
+        // Meta reintentó un webhook que ya habíamos procesado: idempotente, no se re-encola.
+        duplicates++;
+        continue;
+      }
+
+      accepted++;
+
+      // Sin await a propósito: el procesamiento (decidir respuesta, enviar,
+      // persistir) pasa a la cola y el webhook responde 200 de inmediato, antes
+      // de que Meta lo reintente por timeout.
+      enqueueMessageProcessing(conversation.id, () =>
+        handleIncomingMessage({
+          conversationId: conversation.id,
+          channelId: message.channelId,
+          chatId: message.chatId,
+          inboundMessageId: inboundMessage.id,
+          providerMessageId: message.providerMessageId,
+          body: inboundMessage.body,
+        }),
+      );
+    }
+
+    return reply.code(200).send({
+      accepted,
+      duplicates,
+      ignored: parsed.ignored.length,
+      statuses: parsed.statuses.length,
+    });
   });
 }

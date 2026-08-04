@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "98f2a982-4d61-4267-8cc9-bdb735779383",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "a2f476f1-b65d-410c-b135-3c9a5a8a1d71",
+  "prevId": "98f2a982-4d61-4267-8cc9-bdb735779383",
   "tables": {
     "categories": {
       "name": "categories",
@@ -70,6 +70,13 @@
         "resolved_at": {
           "name": "resolved_at",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sender_name": {
+          "name": "sender_name",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -190,6 +197,13 @@
         "wa_timestamp": {
           "name": "wa_timestamp",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "delivery_status": {
+          "name": "delivery_status",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
