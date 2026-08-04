@@ -356,6 +356,26 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
    al usuario que este pendiente existe y toca esa misma zona, antes de asumir que el cambio es
    aislado.
 
+9. **Sacar la base de datos del archivo SQLite local y llevar el backup fuera de la máquina
+   (2026-08-04, documentado, sin implementar a propósito — pedido explícito del usuario).** Motivado
+   por la propia sesión de hoy: hubo que borrar y recrear `data/bot.db` a mano dos veces para limpiar
+   datos de prueba (con backup previo, pero local) — un archivo único en un solo disco es un punto
+   único de falla, y además cualquiera con acceso al filesystem (un agente, un script, un typo de
+   `rm`) puede tocarlo directamente sin pasar por ninguna capa de control.
+   - **Base de datos**: hoy `DATABASE_URL=file:./data/bot.db` (SQLite local vía `@libsql/client`, ver
+     decisión en sección 2). Evaluar apuntar a un servicio gestionado en vez de un archivo local — la
+     opción más directa es **Turso** (mismo `@libsql/client`, mismo dialecto en `drizzle.config.ts`,
+     **no debería requerir cambiar código**, solo `DATABASE_URL` + un `authToken`), pero vale evaluar
+     alternativas (Postgres gestionado, etc.) si en algún momento se necesita algo más que SQLite.
+   - **Backups**: `scripts/backup-db.mjs` hoy copia a `backups/` **dentro del mismo proyecto/disco**
+     (`path.join(path.dirname(dbPath), "..", "backups")` en el script) — sirve para deshacer un error
+     propio al toque, pero no protege contra un problema de la máquina entera. Sumar un destino externo
+     (subida a un storage tipo S3/Google Drive, o al menos otro disco/carpeta fuera del repo) además
+     del local, no en reemplazo.
+   - Sigue habiendo un pendiente más chico sin resolver de la Fase 3 (ver sección 3, fila de
+     `scripts/backup-db.mjs`): el script existe pero no está agendado en ningún cron/Programador de
+     tareas — ese es un prerequisito más inmediato, independiente de este punto.
+
 ## 7. Adaptaciones a CONSTITUTION.md
 
 Ninguna. Las decisiones específicas del proyecto (SQLite vía libsql, TypeScript 6.x, etc.) son
