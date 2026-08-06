@@ -65,6 +65,18 @@ async function main() {
     },
   );
 
+  // Headers de seguridad básicos en toda respuesta (no solo el dashboard): son
+  // inofensivos para el webhook/health (APIs JSON) y mitigan clickjacking/MIME
+  // sniffing en el HTML del dashboard. Sin CSP a propósito: el dashboard tiene
+  // un <style> inline (ver dashboard/render.ts) y no vale la pena auditar todo
+  // el HTML server-rendered para una superficie chica de uso interno/admin.
+  fastify.addHook("onSend", async (_request, reply, payload) => {
+    reply.header("X-Content-Type-Options", "nosniff");
+    reply.header("X-Frame-Options", "DENY");
+    reply.header("Referrer-Policy", "no-referrer");
+    return payload;
+  });
+
   // Sin autenticación a propósito: lo consume un monitor externo (UptimeRobot y
   // similares), que no manda credenciales.
   fastify.get("/health", async (_request, reply) => {

@@ -15,6 +15,7 @@ import {
   type StatsFilters,
 } from "../db/repositories/stats.js";
 import { requireDashboardAuth } from "./auth.js";
+import { requireSameOrigin } from "./csrf.js";
 import { parseDateParam } from "./dateRange.js";
 import { renderDashboard } from "./render.js";
 
@@ -110,7 +111,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance): Promise
   // dashboard preservando el filtro de fecha que tenía puesto quien lo marcó.
   fastify.post<{ Params: { id: string }; Body: { from?: string; to?: string } }>(
     "/dashboard/pending/:id/resolve",
-    { preHandler: requireDashboardAuth },
+    { preHandler: [requireSameOrigin, requireDashboardAuth] },
     async (request, reply) => {
       const messageId = Number(request.params.id);
       if (Number.isInteger(messageId)) {
@@ -126,7 +127,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance): Promise
   // recientemente" (ver renderRecentlyResolved). Mismo patrón sin JS.
   fastify.post<{ Params: { id: string }; Body: { from?: string; to?: string } }>(
     "/dashboard/pending/:id/reopen",
-    { preHandler: requireDashboardAuth },
+    { preHandler: [requireSameOrigin, requireDashboardAuth] },
     async (request, reply) => {
       const messageId = Number(request.params.id);
       if (Number.isInteger(messageId)) {
@@ -144,7 +145,7 @@ export async function registerDashboardRoutes(fastify: FastifyInstance): Promise
   // distinto (conversación vs. mensaje puntual). Mismo patrón sin JS.
   fastify.post<{ Params: { id: string }; Body: { from?: string; to?: string } }>(
     "/dashboard/conversations/:id/resolve",
-    { preHandler: requireDashboardAuth },
+    { preHandler: [requireSameOrigin, requireDashboardAuth] },
     async (request, reply) => {
       const conversationId = Number(request.params.id);
       if (Number.isInteger(conversationId)) {

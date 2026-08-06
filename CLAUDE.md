@@ -72,7 +72,7 @@ con Meta, ver fila de `webhook/` más arriba.
 | Modo degradado (`conversation/degradedMode.ts` + `handleIncomingMessage.ts`) | ✅ | Try/catch de nivel superior ante cualquier error no controlado → intenta mandar `DEGRADED_MODE_MESSAGE` y persistirlo (`error_interno`, `needsHumanReview: true`). Throttle en memoria (5 min/chat) para no mandar el mismo mensaje repetido si la falla persiste en varios mensajes seguidos |
 | `db/health.ts` | ✅ | `GET /health` hace `count(*)` real sobre `conversations` (no `SELECT 1`, que no detectaría un schema sin migrar), devuelve 503 si falla. Sin auth: lo consume un monitor externo |
 | `ecosystem.config.cjs` (PM2) | ✅ | `node_args: "--env-file=.env"` (PM2 no pasa por el script `start` de package.json) y `cwd: __dirname` (`DATABASE_URL` es relativa; sin esto, un `cwd` distinto crearía una base vacía en otro lado sin avisar) |
-| `scripts/backup-db.mjs` (2026-08-01) | ✅ | `npm run db:backup` copia el archivo SQLite a `backups/bot-<fecha>-<hora>.db` y poda copias viejas (retención configurable, `--keep`, default 30). Solo para `DATABASE_URL` tipo `file:...` — no hace nada si no lo es. No corre solo: falta agregarlo a un cron/Programador de tareas (documentado en README, no configurado) |
+| `scripts/backup-db.mjs` (2026-08-01, agendado 2026-08-04) | ✅ | `npm run db:backup` copia el archivo SQLite a `backups/bot-<fecha>-<hora>.db` y poda copias viejas (retención configurable, `--keep`, default 30). Solo para `DATABASE_URL` tipo `file:...` — no hace nada si no lo es. **Agendado en el Programador de tareas de Windows** (tarea `WhatsappBotBackup`, diario 03:00, retiene 30 — default del script): corre `node --env-file=.env scripts/backup-db.mjs` con `WorkingDirectory` en la raíz del proyecto, log en `backups/backup.log` (cubierto por `*.log` en `.gitignore`). Verificado con una corrida manual (`Start-ScheduledTask`): `LastTaskResult 0`, backup nuevo creado. Es una tarea local a esta máquina — si el bot se muda a un servidor, hay que recrearla ahí (o migrar a un cron real), no viaja con el repo |
 
 Verificado manualmente: script contra DB de prueba con los tres outcomes de conversación sembrados
 a mano (confirmando que un fallback **no** cuenta como resuelto); servidor real con los tres casos
@@ -286,9 +286,9 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
      en sección 3. Adaptado en la Fase 5 al vocabulario de errores de Meta (`retryable`).
    - ~~`WAHA_HMAC_KEY` opcional en producción~~ — ahora obligatoria si `NODE_ENV=production`.
      Reemplazado en la Fase 5 por `META_APP_SECRET`/`META_VERIFY_TOKEN`, mismo criterio.
-   - ~~Sin backup del archivo SQLite~~ — `npm run db:backup`, ver sección 3. Falta programarlo en un
-     cron/Programador de tareas (documentado en README, no configurado — no hay un servidor de
-     producción corriendo todavía donde programarlo).
+   - ~~Sin backup del archivo SQLite~~ — `npm run db:backup`, ver sección 3. **Agendado el
+     2026-08-04** en el Programador de tareas de Windows de esta máquina (diario 03:00, retiene 30).
+     Pendiente si se muda a un servidor de producción: recrear la tarea ahí (o pasar a cron real).
    - ~~"Marcar como atendido" sin deshacer~~ — botón "Reabrir", ver sección 3.
    - Concurrencia de la cola probada con una carga más realista (40 mensajes, 20 conversaciones) —
      ver sección 3, fila de `queue/`. Reverificada en la Fase 5 con el nuevo formato batcheado de
@@ -319,14 +319,39 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
    - **Cargar las variables de entorno por el mecanismo del hosting** (secrets del proveedor), no un
      `.env` copiado a mano al server.
 
-   No bloqueante, nice-to-have, para una ronda posterior:
-   - Sin rate limiting en ningún endpoint (`/dashboard` sin límite de intentos de login; el webhook
-     ya se autoprotege porque la firma se verifica antes de tocar la DB).
-   - CSRF en las acciones del dashboard ("Marcar como atendido", "Reactivar bot"): son `<form>` sin
-     token CSRF — con Basic Auth el navegador reenvía credenciales cacheadas a cualquier POST a ese
-     host aunque lo inicie otra página. Impacto acotado a esas dos acciones administrativas.
-   - Sin headers de seguridad tipo helmet (`X-Content-Type-Options`, HSTS, etc.) — bajo impacto,
-     dashboard de uso interno/admin, no superficie pública grande.
+   No bloqueante, nice-to-have — los 3 resueltos el 2026-08-04, sin esperar la ronda posterior
+   porque no dependían de ninguna decisión externa (a diferencia de los 4 bloqueantes de arriba):
+   - ~~Sin rate limiting en ningún endpoint~~ — **resuelto**: `requireDashboardAuth`
+     (`src/dashboard/auth.ts`) ahora corta con `429` (header `Retry-After: 900`) a una IP que
+     acumule 10 intentos fallidos en 15 minutos (`src/dashboard/rateLimit.ts`, en memoria, mismo
+     patrón que el throttle de modo degradado — se resetea si el proceso reinicia, aceptado). Solo
+     cuenta fallos, así que un uso normal con credenciales correctas nunca se ve afectado; una vez
+     bloqueada la IP, ni siquiera la contraseña correcta pasa hasta que venza la ventana (verificado
+     a mano: 9 fallos pasan, el 10mo ya da 429, y con la contraseña real después sigue dando 429).
+     El webhook no necesitaba esto (ver nota original, sigue vigente). **Caveat documentado en el
+     código**: usa `request.ip`, que sin `trustProxy` configurado en Fastify da la IP del proxy (no
+     la del cliente real) si el hosting final pone un reverse proxy adelante — revisar `trustProxy`
+     el día que eso pase, es parte del punto "HTTPS delante del server" de arriba.
+   - ~~Sin headers de seguridad tipo helmet~~ — **resuelto, parcial a propósito**: hook `onSend`
+     global en `src/server.ts` agrega `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` y
+     `Referrer-Policy: no-referrer` a toda respuesta (dashboard, webhook, health — inofensivo en las
+     dos últimas por ser APIs JSON). Sin dependencia nueva (no se sumó `helmet`, mismo criterio que
+     `URLSearchParams` en vez de `@fastify/formbody`). **Sin CSP ni HSTS a propósito**: el dashboard
+     tiene un `<style>` inline (`dashboard/render.ts`) que un CSP por defecto rompería, y HSTS no
+     tiene sentido hasta que haya HTTPS real delante (bloqueante ya documentado arriba) — quedan
+     pendientes de esa misma instancia, no de esta.
+   - ~~CSRF en las acciones del dashboard~~ — **resuelto el 2026-08-04** (mismo día, pasada propia
+     como se anotó acá mismo): `requireSameOrigin` (`src/dashboard/csrf.ts`), preHandler nuevo en
+     los tres `POST /dashboard/...` (`pending/:id/resolve`, `pending/:id/reopen`,
+     `conversations/:id/resolve`, antes de `requireDashboardAuth` — así una request cross-site ni
+     gasta un intento contra el rate limit nuevo de arriba). Sin token (habría necesitado estado del
+     lado servidor, que Basic Auth no tiene): compara el host de `Origin` (o `Referer` si el
+     navegador no mandó `Origin`) contra el header `Host` del propio request — ninguno de los dos es
+     falsificable por JS de otro origen. Falla cerrado sin ninguno de los dos headers, mismo criterio
+     que `dashboard_not_configured` en `auth.ts`. Verificado a mano contra el servidor real: sin
+     headers → `403`; `Origin: https://evil-site.com` → `403`; `Origin`/`Referer` apuntando al mismo
+     host → `303` (el flujo normal del form). Sin tests de Vitest a propósito, mismo criterio que el
+     resto de `dashboard/` (se verifica a mano, ver sección 2).
 
 8. **Activar WhatsApp Coexistence (2026-08-04, documentado, sin implementar a propósito — pedido
    explícito del usuario: no tocar código todavía, solo dejarlo anotado para retomar más adelante).**
@@ -372,9 +397,10 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
      propio al toque, pero no protege contra un problema de la máquina entera. Sumar un destino externo
      (subida a un storage tipo S3/Google Drive, o al menos otro disco/carpeta fuera del repo) además
      del local, no en reemplazo.
-   - Sigue habiendo un pendiente más chico sin resolver de la Fase 3 (ver sección 3, fila de
-     `scripts/backup-db.mjs`): el script existe pero no está agendado en ningún cron/Programador de
-     tareas — ese es un prerequisito más inmediato, independiente de este punto.
+   - ~~Pendiente más chico de la Fase 3: agendar el script~~ — **resuelto el 2026-08-04** (ver
+     sección 3, fila de `scripts/backup-db.mjs`): tarea diaria en el Programador de tareas de
+     Windows de esta máquina. Sigue en pie el punto de fondo de esta sección 9 (destino externo,
+     no solo el mismo disco).
 
 ## 7. Adaptaciones a CONSTITUTION.md
 

@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { env } from "../config/env.js";
+import { isRateLimited, recordFailedAttempt, resetAttempts } from "./rateLimit.js";
 
 /**
  * Compara dos strings en tiempo constante, sin filtrar su longitud.
@@ -62,6 +63,17 @@ export async function requireDashboardAuth(
     return;
   }
 
+  // Se chequea antes de tocar las credenciales: una IP que ya gastó sus
+  // intentos no necesita que comparemos nada más, y así tampoco cuenta contra
+  // sí misma request tras request (ver rateLimit.ts).
+  if (isRateLimited(request.ip)) {
+    await reply
+      .code(429)
+      .header("Retry-After", "900")
+      .send({ error: "too_many_attempts" });
+    return;
+  }
+
   const credentials = parseBasicAuthHeader(request.headers.authorization);
 
   // Se evalúan ambas comparaciones siempre (sin cortocircuito) para no revelar
@@ -70,11 +82,15 @@ export async function requireDashboardAuth(
   const passwordOk = credentials !== null && safeEqual(credentials.password, expectedPassword);
 
   if (!usernameOk || !passwordOk) {
+    recordFailedAttempt(request.ip);
     // El header WWW-Authenticate es lo que hace que el navegador muestre su
     // prompt nativo de usuario/contraseña.
     await reply
       .code(401)
       .header("WWW-Authenticate", 'Basic realm="Dashboard", charset="UTF-8"')
       .send({ error: "unauthorized" });
+    return;
   }
+
+  resetAttempts(request.ip);
 }
