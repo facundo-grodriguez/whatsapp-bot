@@ -70,10 +70,18 @@ async function main() {
   // sniffing en el HTML del dashboard. Sin CSP a propósito: el dashboard tiene
   // un <style> inline (ver dashboard/render.ts) y no vale la pena auditar todo
   // el HTML server-rendered para una superficie chica de uso interno/admin.
+  //
+  // Referrer-Policy "same-origin" (no "no-referrer"): mismo criterio de
+  // privacidad hacia afuera (no se filtra el Referer a otros sitios), pero
+  // "no-referrer" rompía en la práctica los <form> del propio dashboard
+  // ("Marcar como atendido", "Reactivar bot") — el navegador no manda Origin
+  // en esa navegación same-origin y, sin Referer tampoco, requireSameOrigin
+  // (ver dashboard/csrf.ts) no tenía con qué validar y rechazaba con 403.
+  // Descubierto probando a mano contra el server real (2026-08-06).
   fastify.addHook("onSend", async (_request, reply, payload) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
-    reply.header("Referrer-Policy", "no-referrer");
+    reply.header("Referrer-Policy", "same-origin");
     return payload;
   });
 

@@ -91,4 +91,17 @@ export const FAQ_RULES: FaqRule[] = [
       "Podés pagar en efectivo, por transferencia o con tarjeta de crédito o débito.",
     ],
   },
+  {
+    // Última a propósito: si el mensaje además trae una consulta puntual (ej.
+    // "hola, ¿cuál es el horario?"), esa regla más específica matchea primero
+    // porque FAQ_RULES.find recorre el array en orden — esta solo gana cuando
+    // el mensaje es un saludo solo, sin ninguna consulta reconocible.
+    category: "saludo",
+    categoryLabel: "Saludo",
+    keywords: ["hola", "buenas", "buen dia", "buenos dias", "buenas tardes", "buenas noches", "que tal"],
+    responses: [
+      "¡Hola! ¿En qué te podemos ayudar? Contanos qué necesitás y te respondemos al toque.",
+      "¡Hola! Gracias por escribirnos. ¿En qué te podemos ayudar hoy?",
+    ],
+  },
 ];

@@ -44,7 +44,7 @@ hosting, canal real de notificación al vendedor, FAQs reales).
 
 | Módulo | Estado | Notas |
 |---|---|---|
-| `config/` (env, rules, purchaseIntent, messages, categories, channels) | ✅ | 4 FAQs + 1 regla de intención de compra de ejemplo; cada regla/mensaje tiene variantes de respuesta (`responses: string[]`), no un texto único. `META_APP_SECRET`/`META_VERIFY_TOKEN` obligatorias si `NODE_ENV=production` (chequeo cruzado en `loadEnv`, mismo criterio que `WAHA_HMAC_KEY` antes) — opcionales solo en development/test. `channels.ts` (2026-08-02, Fase 5): `CHANNEL_LABELS` traduce `channelId` (el `phone_number_id` de Meta, un número largo) a un nombre legible para el dashboard — sin entrada en el mapa, muestra el id crudo |
+| `config/` (env, rules, purchaseIntent, messages, categories, channels) | ✅ | 8 FAQs de PrintLab 3D (cargadas 2026-08-04, ver comentario en `rules.ts`) + 1 regla de "saludo" (agregada 2026-08-06, ver abajo) + 1 regla de intención de compra; cada regla/mensaje tiene variantes de respuesta (`responses: string[]`), no un texto único. `META_APP_SECRET`/`META_VERIFY_TOKEN` obligatorias si `NODE_ENV=production` (chequeo cruzado en `loadEnv`, mismo criterio que `WAHA_HMAC_KEY` antes) — opcionales solo en development/test. `channels.ts` (2026-08-02, Fase 5): `CHANNEL_LABELS` traduce `channelId` (el `phone_number_id` de Meta, un número largo) a un nombre legible para el dashboard — sin entrada en el mapa, muestra el id crudo. **Regla "saludo" (2026-08-06)**: pedido del usuario al ver, probando con datos simulados, que un simple "hola buenas tardes" caía en "sin match" y quedaba en la cola de revisión — no tenía sentido pedirle a un humano que revise un saludo. Agregada **última** en `FAQ_RULES` a propósito: `RulesEngine` usa `.find()` (primer match gana, ver `rulesEngine.ts`), así que un mensaje como "hola, ¿cuál es el horario?" sigue matcheando la regla de horarios primero — "saludo" solo gana cuando el mensaje es un saludo puro, sin ninguna consulta reconocible. Verificado a mano: ambos casos responden lo esperado, y el saludo puro no aparece en "Pendientes de revisión" (matchear cualquier FAQ pone `requiereRevisionHumana: false`, ver `rulesEngine.ts`). **Label de `CATEGORY_SIN_MATCH` renombrado** el mismo día, mismo pedido: "Sin match (revisión humana)" → "Sin match (a revisar)" en `categories.ts` — más corto, mismo significado, es lo que ve el negocio en el dashboard |
 | `db/` (schema, cliente, migraciones, repositorios) | ✅ | Conversación identificada por `(channelId, chatId)` — antes `(sessionName, chatId)`, renombrado en la Fase 5 (`channelId` guarda el `phone_number_id` de Meta, pero el nombre se mantiene neutro por la misma regla de aislamiento que `engine/types.ts`). `conversations.resolvedAt` (Fase 5): cuándo se reactivó el bot en una conversación derivada, ver fila de "Reactivar bot" más abajo |
 | `engine/` (RulesEngine detrás de `ResponseEngine`) | ✅ | 23 tests de Vitest en verde. Elige variante de respuesta al azar vía `engine/variant.ts` (mitigación de ban con WAHA; con Meta ya no aplica el motivo pero la feature se mantiene por variedad de respuesta, ver sección 5). `DecisionContext.sessionName` → `channelId` (Fase 5, rename mecánico, cero cambio de lógica) |
 | `messaging/` (interfaz `MessagingProvider` + `cloudApi/`) | ✅ | **Reemplaza a `waha/`, borrado por completo en la Fase 5.** Mismo patrón que `ResponseEngine`: el resto del sistema depende solo de la interfaz (`sendText`, `markReadAndTyping`, `verifyWebhookSignature`, `parseWebhook`), nunca de `CloudApiProvider` directamente — selección única en `messaging/index.ts` (espejo de `engine/index.ts`). `markReadAndTyping` es una sola llamada a propósito: la Cloud API no tiene "stopTyping", el indicador se apaga solo al llegar el mensaje (o a los 25s) — el par `startTyping`/`stopTyping` de WAHA colapsó en una. `parseWebhook` es pura y determinista (nunca tira, payload irreconocible → listas vacías) — 23 tests de Vitest cubriendo lotes de N mensajes, mensajes + acuses de estado mezclados, tipos no soportados, body vacío, timestamps inválidos, y "un item malformado no tira el resto del lote". `MessagingError.retryable` clasifica códigos de Meta (`cloudApi/errorCodes.ts`): 190 (token vencido), 131047 (ventana de 24hs cerrada), 131009, 131026 → no reintentables, cualquier otro código → reintentable por default |
@@ -334,7 +334,7 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
      el día que eso pase, es parte del punto "HTTPS delante del server" de arriba.
    - ~~Sin headers de seguridad tipo helmet~~ — **resuelto, parcial a propósito**: hook `onSend`
      global en `src/server.ts` agrega `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` y
-     `Referrer-Policy: no-referrer` a toda respuesta (dashboard, webhook, health — inofensivo en las
+     `Referrer-Policy: same-origin` (2026-08-06, antes `no-referrer` — ver bug real más abajo) a toda respuesta (dashboard, webhook, health — inofensivo en las
      dos últimas por ser APIs JSON). Sin dependencia nueva (no se sumó `helmet`, mismo criterio que
      `URLSearchParams` en vez de `@fastify/formbody`). **Sin CSP ni HSTS a propósito**: el dashboard
      tiene un `<style>` inline (`dashboard/render.ts`) que un CSP por defecto rompería, y HSTS no
@@ -352,6 +352,18 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
      headers → `403`; `Origin: https://evil-site.com` → `403`; `Origin`/`Referer` apuntando al mismo
      host → `303` (el flujo normal del form). Sin tests de Vitest a propósito, mismo criterio que el
      resto de `dashboard/` (se verifica a mano, ver sección 2).
+     **Bug real encontrado el 2026-08-06, usando el dashboard de verdad (no curl)**: "Marcar como
+     atendido"/"Reactivar bot" tiraban `403` siempre, incluso haciendo click en la propia página. Causa:
+     el header `Referrer-Policy: no-referrer` (ver `server.ts`, fila de arriba) le sacaba el `Referer`
+     a la navegación del propio `<form>`, y el navegador tampoco manda `Origin` en esa request
+     same-origin puntual — `requireSameOrigin` se quedaba sin nada que validar y fallaba cerrado contra
+     un caso legítimo, no solo contra ataques. Las pruebas con curl de más arriba no lo agarraron
+     porque ahí los headers se arman a mano (siempre presentes). **Fix**: `Referrer-Policy` pasó de
+     `no-referrer` a `same-origin` — misma protección hacia sitios externos, pero deja pasar el
+     `Referer` en navegación same-origin. Re-verificado con curl replicando el caso real (solo
+     `Referer`, sin `Origin`) → `303`; cross-site y sin headers siguen en `403`. **Lección**: probar
+     los forms del dashboard con curl armando los headers a mano no sustituye probarlos desde un
+     navegador real — quedó un blind spot ahí.
 
 8. **Activar WhatsApp Coexistence (2026-08-04, documentado, sin implementar a propósito — pedido
    explícito del usuario: no tocar código todavía, solo dejarlo anotado para retomar más adelante).**

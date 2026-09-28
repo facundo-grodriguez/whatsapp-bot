@@ -170,7 +170,12 @@ const STYLES = `
   th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #e5e7eb; }
   th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #6b7280; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td form { display: inline; margin: 0; }
+  /* display: block (no inline) para que, cuando una celda tiene dos forms
+     (ej. "Reactivar bot" + "Marcar como atendido"), queden apilados prolijos
+     con el mismo borde izquierdo en vez de desalinearse según el ancho del
+     botón anterior. */
+  td form { display: block; margin: 0 0 .35rem; }
+  td form:last-child { margin-bottom: 0; }
   td form button { padding: .3rem .5rem; font-size: .8rem; }
   .empty { color: #6b7280; font-style: italic; padding: .75rem 0; }
   [title] { cursor: help; }
@@ -349,13 +354,8 @@ function renderPendingReview(
       <tbody>${body}</tbody>
     </table>
     <p class="note">
-      Del más viejo al más nuevo, para que nada quede esperando. Pasá el mouse sobre la antigüedad
-      para ver la fecha y hora exacta, y sobre el ícono junto al mensaje para ver el estado de entrega
-      completo. "Abrir chat" te lleva directo a esa conversación en WhatsApp. "Reactivar bot" solo
-      aparece (junto al botón de atendido) en las conversaciones derivadas a un vendedor: vuelve a
-      dejar que el bot responda ahí. "Marcar como atendido" la saca de esta lista y suma al contador
-      de "Resueltas manualmente" — si te apretaste, podés deshacerlo desde "Resueltas recientemente"
-      más abajo.
+      Ordenado del más viejo al más nuevo. "Reactivar bot" solo aparece en conversaciones derivadas.
+      "Marcar como atendido" se puede deshacer desde "Resueltas recientemente" más abajo.
     </p>`;
 }
 
