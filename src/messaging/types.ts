@@ -9,8 +9,8 @@
  * 1. Este archivo no importa nada de `config/`, `db/` ni hace fetch — solo tipos.
  * 2. `channelId` es "cuál de nuestros números" (del lado de Meta, el
  *    phone_number_id); `chatId` es "con quién hablamos". Se mantiene el nombre
- *    `channelId` neutro — igual que `sessionName` no debía filtrar conceptos de
- *    WAHA hacia el motor, `channelId` no debe filtrar conceptos de Meta.
+ *    `channelId` neutro para no filtrar conceptos de Meta hacia el motor de
+ *    decisión, que no debe depender del proveedor de mensajería concreto.
  * 3. `parseWebhook` es pura y NUNCA tira: un payload irreconocible devuelve
  *    listas vacías, porque el webhook siempre debe responder 200 (el proveedor
  *    reintenta ante cualquier otra cosa, potencialmente para siempre).
@@ -61,9 +61,8 @@ export interface IgnoredEntry {
 
 /**
  * Resultado de parsear UNA request HTTP del webhook. Es una lista a propósito:
- * a diferencia de WAHA (un evento por request), el proveedor puede empaquetar
- * varios mensajes de chats distintos, más varios acuses de estado, en una sola
- * entrega.
+ * el proveedor puede empaquetar varios mensajes de chats distintos, más varios
+ * acuses de estado, en una sola entrega.
  */
 export interface ParsedWebhook {
   messages: InboundMessage[];
@@ -102,7 +101,7 @@ export interface MessagingProvider {
    * Marca como leído y, opcionalmente, muestra "escribiendo…". Es UNA sola
    * llamada porque así lo modela la Cloud API: no existe un "stopTyping" — el
    * indicador se apaga solo al llegar el mensaje (o a los 25s). Cosmético:
-   * nunca tira, igual que startTyping/stopTyping en el WAHA client que reemplaza.
+   * nunca tira.
    */
   markReadAndTyping(input: MarkReadAndTypingInput): Promise<void>;
 

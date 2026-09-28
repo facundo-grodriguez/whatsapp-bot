@@ -3,10 +3,9 @@
  * Dispara un webhook simulado de la Cloud API de Meta contra el servidor local,
  * sin necesidad de cuenta de Meta ni número de prueba conectado. Sirve para
  * probar todo el flujo (parseo -> motor de reglas -> respuesta -> persistencia)
- * end-to-end, y para probar concurrencia: a diferencia de WAHA (un evento por
- * request), Meta puede empaquetar varios mensajes de chats distintos en un solo
- * POST — así que `--chats`/`--count` arman un solo request con todos adentro,
- * en vez de disparar N requests en paralelo.
+ * end-to-end, y para probar concurrencia: Meta puede empaquetar varios mensajes
+ * de chats distintos en un solo POST — así que `--chats`/`--count` arman un
+ * solo request con todos adentro, en vez de disparar N requests en paralelo.
  *
  * Uso:
  *   npm run simulate -- "¿cuál es el horario?"

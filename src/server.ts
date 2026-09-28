@@ -21,9 +21,8 @@ async function main() {
 
   // Content-type parser custom: además de parsear el JSON, guarda el body crudo
   // en request.rawBody para poder verificar la firma X-Hub-Signature-256 de Meta
-  // sobre los bytes originales (ver messaging/cloudApi/signature.ts). Más
-  // crítico que con WAHA: Meta firma bytes exactos, un JSON re-serializado
-  // nunca va a coincidir.
+  // sobre los bytes originales (ver messaging/cloudApi/signature.ts). Meta firma
+  // bytes exactos, así que un JSON re-serializado nunca va a coincidir.
   fastify.addContentTypeParser(
     "application/json",
     { parseAs: "buffer" },

@@ -138,10 +138,9 @@ export async function getConversationOutcomes(
  * Tiempo promedio (ms) entre que entra un mensaje y sale su respuesta.
  *
  * OJO al interpretarlo: incluye el delay configurable antes de responder
- * (RESPONSE_DELAY_MIN_MS/MAX_MS, default 0 desde la Fase 5 — ya no es una
- * mitigación anti-ban como con WAHA, ver CLAUDE.md §2), no solo el tiempo de
- * procesamiento. Es válido como latencia percibida por el cliente, pero no como
- * medida de rendimiento interno del bot.
+ * (RESPONSE_DELAY_MIN_MS/MAX_MS, default 0, ver CLAUDE.md §2), no solo el
+ * tiempo de procesamiento. Es válido como latencia percibida por el cliente,
+ * pero no como medida de rendimiento interno del bot.
  *
  * Devuelve `null` si todavía no hay ninguna respuesta con `in_reply_to_id`.
  */

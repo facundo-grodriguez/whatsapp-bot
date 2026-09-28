@@ -15,10 +15,10 @@ interface VerifyQuerystring {
 
 export async function registerWebhookRoutes(fastify: FastifyInstance): Promise<void> {
   /**
-   * Verificación del webhook (sin equivalente en WAHA): Meta la dispara una
-   * sola vez, al cargar la Callback URL en el App Dashboard, para confirmar que
-   * el endpoint es tuyo. Responde con el `hub.challenge` tal cual, como texto
-   * plano — no JSON — solo si el token coincide con META_VERIFY_TOKEN.
+   * Verificación del webhook: Meta la dispara una sola vez, al cargar la
+   * Callback URL en el App Dashboard, para confirmar que el endpoint es tuyo.
+   * Responde con el `hub.challenge` tal cual, como texto plano — no JSON —
+   * solo si el token coincide con META_VERIFY_TOKEN.
    */
   fastify.get<{ Querystring: VerifyQuerystring }>("/webhook/whatsapp", async (request, reply) => {
     const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = request.query;
@@ -36,9 +36,9 @@ export async function registerWebhookRoutes(fastify: FastifyInstance): Promise<v
     const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
 
     if (!request.rawBody) {
-      // A diferencia de WAHA, acá no hay fallback razonable: Meta firma los
-      // bytes EXACTOS del body, así que un JSON re-serializado nunca va a
-      // coincidir con la firma — mejor un motivo explícito que un 401 opaco.
+      // No hay fallback razonable: Meta firma los bytes EXACTOS del body, así
+      // que un JSON re-serializado nunca va a coincidir con la firma — mejor
+      // un motivo explícito que un 401 opaco.
       request.log.error("No se capturó el body crudo del webhook, no se puede verificar la firma");
       return reply.code(200).send({ ignored: true, reason: "missing_raw_body" });
     }

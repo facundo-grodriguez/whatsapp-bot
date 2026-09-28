@@ -11,10 +11,10 @@ Bot de atención al primer contacto por WhatsApp: responde FAQs automáticamente
 de compra y deriva a un vendedor humano. Pensado para escalar en fases sin retrabajo (ver
 sección 4). Detalle de uso en [`README.md`](./README.md).
 
-**Etapa actual: MVP, migrado a la API oficial de WhatsApp.** Fases 1, 2, 3, 4 y 5 implementadas. La
-Fase 5 (2026-08-02, ver sección 3) reemplazó WAHA por la **Cloud API de Meta** como único proveedor
-de mensajería — decisión tomada para no invertir tiempo en un paso intermedio no oficial, ya que
-Meta da números de prueba gratis con sandbox completo. Fase 4 (IA) sigue **apagada por defecto**
+**Etapa actual: MVP sobre la API oficial de WhatsApp.** Fases 1, 2, 3, 4 y 5 implementadas. La
+Fase 5 (2026-08-02, ver sección 3) integró la **Cloud API de Meta** como único proveedor de
+mensajería, aprovechando que Meta da números de prueba gratis con sandbox completo. Fase 4 (IA)
+sigue **apagada por defecto**
 (`AI_FALLBACK_ENABLED=false`): el código está probado con Vitest pero no verificado end-to-end
 contra la API real de OpenAI (ver sección 3). La cuenta/app de Meta ya está creada y probada
 end-to-end contra un número real (2026-08-03, ver sección 6) — quedó al descubierto y resuelto un
@@ -27,7 +27,7 @@ hosting, canal real de notificación al vendedor, FAQs reales).
 
 | Decisión | Elección | Notas |
 |---|---|---|
-| Conexión a WhatsApp | **Meta WhatsApp Cloud API** (oficial) — reemplaza a WAHA (2026-08-02, Fase 5) | Sin sesión persistente ni QR: autenticación por token (temporal en dev, permanente vía System User en producción). Detrás de una interfaz `MessagingProvider` (`src/messaging/`), mismo patrón que `ResponseEngine` — única implementación hoy es `CloudApiProvider`. Ver sección 3 (Fase 5) y sección 5 (riesgos nuevos: vencimiento de token, ventana de 24hs, webhook público) |
+| Conexión a WhatsApp | **Meta WhatsApp Cloud API** (oficial), integrada en la Fase 5 (2026-08-02) | Sin sesión persistente ni QR: autenticación por token (temporal en dev, permanente vía System User en producción). Detrás de una interfaz `MessagingProvider` (`src/messaging/`), mismo patrón que `ResponseEngine` — única implementación hoy es `CloudApiProvider`. Ver sección 3 (Fase 5) y sección 5 (riesgos nuevos: vencimiento de token, ventana de 24hs, webhook público) |
 | Lógica de respuesta | Motor híbrido: reglas por keywords + IA como fallback (Fase 4) | `HybridEngine` compone `RulesEngine` (siempre primero) y `AiEngine` (solo si no hay match Y `AI_FALLBACK_ENABLED=true`), sin tocar webhook/orquestador/DB (interfaz `ResponseEngine`) |
 | Proveedor de IA (Fase 4) | OpenAI vía Vercel AI SDK (`ai` + `@ai-sdk/openai`) | Decisión explícita del usuario (no Anthropic). Modelo configurable por `OPENAI_MODEL`, default `gpt-4o-mini` |
 | Alcance de la IA (Fase 4) | Solo responde con las FAQs configuradas (`src/config/rules.ts`) como contexto, nunca con conocimiento propio | Decisión explícita del usuario: prioriza no alucinar datos del negocio sobre cobertura — si no puede responder con las FAQs, cae al mismo fallback fijo que `RulesEngine` (`requiereRevisionHumana: true`) en vez de que el LLM redacte un texto |
@@ -36,7 +36,7 @@ hosting, canal real de notificación al vendedor, FAQs reales).
 | Base de datos | SQLite vía `@libsql/client` + Drizzle ORM | Decisión explícita del usuario: evita compilar módulos nativos en Windows (alternativa a better-sqlite3) |
 | Cola de procesamiento | `p-queue` en memoria, concurrencia global configurable (`QUEUE_CONCURRENCY`, default 10) | El mensaje se persiste antes de encolar; un crash pierde a lo sumo una autorespuesta, nunca el registro. Concurrencia global entre conversaciones **distintas** — dentro de una misma conversación siempre es 1 a la vez (encadenado por `conversationId`), para no correr riesgo de doble derivación o respuestas fuera de orden si el mismo cliente manda varios mensajes seguidos (ver sección 3) |
 | TypeScript | Pinneado a 6.x, no a 7.x | TS7 (compilador nativo, GA jul-2026) todavía no tiene API programática estable (llega en 7.1); mejor estabilidad en 6.x para el MVP |
-| Testing | Vitest sobre `/engine` y `/messaging` (2026-08-02, ampliado en Fase 5; +3 el 2026-08-03) | Lógica pura de alto valor. `AiEngine`/`HybridEngine` se testean con la llamada a OpenAI mockeada (`vi.mock("ai")`). `parseWebhook`/`verifyMetaSignature` (Cloud API) también son puras y deterministas — se agregaron ~30 tests nuevos (61 en total tras la Fase 5) porque el parser de Meta es bastante más complejo que el de WAHA (lotes anidados, tres tipos de contenido mezclados). `tests/messaging/client.test.ts` (2026-08-03, 3 tests, 64 en total): cubre `sendText` con `fetch` mockeado — específicamente el fix de formato de destinatario para Argentina, ver riesgo nuevo en sección 5. Ninguno pega a una API real ni tiene costo. El resto (webhook, repositorios, dashboard) se sigue verificando a mano con `npm run simulate`, mismo criterio que siempre |
+| Testing | Vitest sobre `/engine` y `/messaging` (2026-08-02, ampliado en Fase 5; +3 el 2026-08-03) | Lógica pura de alto valor. `AiEngine`/`HybridEngine` se testean con la llamada a OpenAI mockeada (`vi.mock("ai")`). `parseWebhook`/`verifyMetaSignature` (Cloud API) también son puras y deterministas — se agregaron ~30 tests nuevos (61 en total tras la Fase 5) porque el parser de Meta es bastante complejo (lotes anidados, tres tipos de contenido mezclados). `tests/messaging/client.test.ts` (2026-08-03, 3 tests, 64 en total): cubre `sendText` con `fetch` mockeado — específicamente el fix de formato de destinatario para Argentina, ver riesgo nuevo en sección 5. Ninguno pega a una API real ni tiene costo. El resto (webhook, repositorios, dashboard) se sigue verificando a mano con `npm run simulate`, mismo criterio que siempre |
 
 ## 3. Estado de módulos
 
@@ -44,20 +44,18 @@ hosting, canal real de notificación al vendedor, FAQs reales).
 
 | Módulo | Estado | Notas |
 |---|---|---|
-| `config/` (env, rules, purchaseIntent, messages, categories, channels) | ✅ | 8 FAQs de PrintLab 3D (cargadas 2026-08-04, ver comentario en `rules.ts`) + 1 regla de "saludo" (agregada 2026-08-06, ver abajo) + 1 regla de intención de compra; cada regla/mensaje tiene variantes de respuesta (`responses: string[]`), no un texto único. `META_APP_SECRET`/`META_VERIFY_TOKEN` obligatorias si `NODE_ENV=production` (chequeo cruzado en `loadEnv`, mismo criterio que `WAHA_HMAC_KEY` antes) — opcionales solo en development/test. `channels.ts` (2026-08-02, Fase 5): `CHANNEL_LABELS` traduce `channelId` (el `phone_number_id` de Meta, un número largo) a un nombre legible para el dashboard — sin entrada en el mapa, muestra el id crudo. **Regla "saludo" (2026-08-06)**: pedido del usuario al ver, probando con datos simulados, que un simple "hola buenas tardes" caía en "sin match" y quedaba en la cola de revisión — no tenía sentido pedirle a un humano que revise un saludo. Agregada **última** en `FAQ_RULES` a propósito: `RulesEngine` usa `.find()` (primer match gana, ver `rulesEngine.ts`), así que un mensaje como "hola, ¿cuál es el horario?" sigue matcheando la regla de horarios primero — "saludo" solo gana cuando el mensaje es un saludo puro, sin ninguna consulta reconocible. Verificado a mano: ambos casos responden lo esperado, y el saludo puro no aparece en "Pendientes de revisión" (matchear cualquier FAQ pone `requiereRevisionHumana: false`, ver `rulesEngine.ts`). **Label de `CATEGORY_SIN_MATCH` renombrado** el mismo día, mismo pedido: "Sin match (revisión humana)" → "Sin match (a revisar)" en `categories.ts` — más corto, mismo significado, es lo que ve el negocio en el dashboard |
+| `config/` (env, rules, purchaseIntent, messages, categories, channels) | ✅ | 8 FAQs de PrintLab 3D (cargadas 2026-08-04, ver comentario en `rules.ts`) + 1 regla de "saludo" (agregada 2026-08-06, ver abajo) + 1 regla de intención de compra; cada regla/mensaje tiene variantes de respuesta (`responses: string[]`), no un texto único. `META_APP_SECRET`/`META_VERIFY_TOKEN` obligatorias si `NODE_ENV=production` (chequeo cruzado en `loadEnv`) — opcionales solo en development/test. `channels.ts` (2026-08-02, Fase 5): `CHANNEL_LABELS` traduce `channelId` (el `phone_number_id` de Meta, un número largo) a un nombre legible para el dashboard — sin entrada en el mapa, muestra el id crudo. **Regla "saludo" (2026-08-06)**: pedido del usuario al ver, probando con datos simulados, que un simple "hola buenas tardes" caía en "sin match" y quedaba en la cola de revisión — no tenía sentido pedirle a un humano que revise un saludo. Agregada **última** en `FAQ_RULES` a propósito: `RulesEngine` usa `.find()` (primer match gana, ver `rulesEngine.ts`), así que un mensaje como "hola, ¿cuál es el horario?" sigue matcheando la regla de horarios primero — "saludo" solo gana cuando el mensaje es un saludo puro, sin ninguna consulta reconocible. Verificado a mano: ambos casos responden lo esperado, y el saludo puro no aparece en "Pendientes de revisión" (matchear cualquier FAQ pone `requiereRevisionHumana: false`, ver `rulesEngine.ts`). **Label de `CATEGORY_SIN_MATCH` renombrado** el mismo día, mismo pedido: "Sin match (revisión humana)" → "Sin match (a revisar)" en `categories.ts` — más corto, mismo significado, es lo que ve el negocio en el dashboard |
 | `db/` (schema, cliente, migraciones, repositorios) | ✅ | Conversación identificada por `(channelId, chatId)` — antes `(sessionName, chatId)`, renombrado en la Fase 5 (`channelId` guarda el `phone_number_id` de Meta, pero el nombre se mantiene neutro por la misma regla de aislamiento que `engine/types.ts`). `conversations.resolvedAt` (Fase 5): cuándo se reactivó el bot en una conversación derivada, ver fila de "Reactivar bot" más abajo |
-| `engine/` (RulesEngine detrás de `ResponseEngine`) | ✅ | 23 tests de Vitest en verde. Elige variante de respuesta al azar vía `engine/variant.ts` (mitigación de ban con WAHA; con Meta ya no aplica el motivo pero la feature se mantiene por variedad de respuesta, ver sección 5). `DecisionContext.sessionName` → `channelId` (Fase 5, rename mecánico, cero cambio de lógica) |
-| `messaging/` (interfaz `MessagingProvider` + `cloudApi/`) | ✅ | **Reemplaza a `waha/`, borrado por completo en la Fase 5.** Mismo patrón que `ResponseEngine`: el resto del sistema depende solo de la interfaz (`sendText`, `markReadAndTyping`, `verifyWebhookSignature`, `parseWebhook`), nunca de `CloudApiProvider` directamente — selección única en `messaging/index.ts` (espejo de `engine/index.ts`). `markReadAndTyping` es una sola llamada a propósito: la Cloud API no tiene "stopTyping", el indicador se apaga solo al llegar el mensaje (o a los 25s) — el par `startTyping`/`stopTyping` de WAHA colapsó en una. `parseWebhook` es pura y determinista (nunca tira, payload irreconocible → listas vacías) — 23 tests de Vitest cubriendo lotes de N mensajes, mensajes + acuses de estado mezclados, tipos no soportados, body vacío, timestamps inválidos, y "un item malformado no tira el resto del lote". `MessagingError.retryable` clasifica códigos de Meta (`cloudApi/errorCodes.ts`): 190 (token vencido), 131047 (ventana de 24hs cerrada), 131009, 131026 → no reintentables, cualquier otro código → reintentable por default |
+| `engine/` (RulesEngine detrás de `ResponseEngine`) | ✅ | 23 tests de Vitest en verde. Elige variante de respuesta al azar vía `engine/variant.ts` (se mantiene por variedad de respuesta, no repetir siempre el mismo texto). `DecisionContext.sessionName` → `channelId` (Fase 5, rename mecánico, cero cambio de lógica) |
+| `messaging/` (interfaz `MessagingProvider` + `cloudApi/`) | ✅ | Mismo patrón que `ResponseEngine`: el resto del sistema depende solo de la interfaz (`sendText`, `markReadAndTyping`, `verifyWebhookSignature`, `parseWebhook`), nunca de `CloudApiProvider` directamente — selección única en `messaging/index.ts` (espejo de `engine/index.ts`). `markReadAndTyping` es una sola llamada a propósito: la Cloud API no tiene "stopTyping", el indicador se apaga solo al llegar el mensaje (o a los 25s). `parseWebhook` es pura y determinista (nunca tira, payload irreconocible → listas vacías) — 23 tests de Vitest cubriendo lotes de N mensajes, mensajes + acuses de estado mezclados, tipos no soportados, body vacío, timestamps inválidos, y "un item malformado no tira el resto del lote". `MessagingError.retryable` clasifica códigos de Meta (`cloudApi/errorCodes.ts`): 190 (token vencido), 131047 (ventana de 24hs cerrada), 131009, 131026 → no reintentables, cualquier otro código → reintentable por default |
 | `conversation/` (orquestador, `notifyVendor` stub) | ✅ | `notifyVendor` es un stub que solo loguea — ver sección 5. Antes de enviar: delay configurable (default 0 desde la Fase 5, ver sección 5) + `messaging.markReadAndTyping`. `sendTextWithRetry`: reintenta el envío del camino feliz hasta 2 veces (backoff 1s/2s), pero corta antes si el error viene `retryable: false` (Fase 5) — insistir con un token vencido no cambia el resultado, solo gasta tiempo de cola |
-| `webhook/` (verificación, firma, parseo, Fastify) | ✅ | Ruta `/webhook/whatsapp` (antes `/webhook/waha`). **`GET` nuevo (Fase 5, sin equivalente en WAHA)**: responde el `hub.challenge` como texto plano si `hub.verify_token` coincide con `META_VERIFY_TOKEN` — Meta lo dispara una sola vez al cargar la Callback URL. **`POST` reescrito**: verifica `X-Hub-Signature-256` (SHA256 + prefijo `sha256=`, antes SHA512 sin prefijo) vía `messaging.verifyWebhookSignature`, un body sin `request.rawBody` capturado se reporta con motivo propio (`missing_raw_body`) en vez de caer a un fallback que nunca iba a verificar (Meta firma bytes exactos) → `parseWebhook` → itera el lote (un solo POST puede traer N mensajes de chats distintos, a diferencia de WAHA) → responde `{accepted, duplicates, ignored, statuses}`. Los filtros `fromMe` y `@g.us` de WAHA se eliminaron: código muerto con Meta (no ecoa mensajes propios como `messages`, y la Cloud API no soporta grupos) |
-| `queue/` (p-queue) | ✅ | Errores dentro de una tarea encolada nunca escapan sin catch (evita crash del proceso). Concurrencia global configurable (`QUEUE_CONCURRENCY`, default 10) con serialización por `conversationId`: `Map<number, Promise<void>>` que encadena las tareas de una misma conversación entre sí antes de que compitan por los slots de la cola global — así conversaciones distintas corren en paralelo pero una misma conversación nunca corre dos mensajes a la vez, sin importar la concurrencia configurada. Cada entrada del map se autolimpia al terminar si nadie encoló nada nuevo para esa key mientras corría, para no crecer sin límite en memoria. Sin acoplamiento a WAHA ni a Meta (clave numérica `conversationId`) — no necesitó ningún cambio en la Fase 5. **Probado bajo carga**: 40 mensajes (20 conversaciones × 2) procesados en 8.6s con `QUEUE_CONCURRENCY=10` con WAHA, y de nuevo verificado en la Fase 5 vía un solo POST batcheado de Meta — en ambos casos orden preservado en las 20 conversaciones (verificado contra la base, no solo el log). Sigue siendo una prueba de desarrollo, no tráfico real sostenido |
-| README / `.env.example` / script de simulación | ✅ | `npm run simulate -- "texto"` prueba todo el flujo sin cuenta de Meta. Reescrito en la Fase 5 para el payload de Meta, con `--count`/`--chats` (batching en un solo POST, antes había que disparar N requests en paralelo con WAHA), `--message-id` (prueba de idempotencia), `--status` (acuses de entrega), `--verify` (el GET de verificación) y firma automática si `META_APP_SECRET` está seteada |
+| `webhook/` (verificación, firma, parseo, Fastify) | ✅ | Ruta `/webhook/whatsapp`. **`GET` nuevo (Fase 5)**: responde el `hub.challenge` como texto plano si `hub.verify_token` coincide con `META_VERIFY_TOKEN` — Meta lo dispara una sola vez al cargar la Callback URL. **`POST` reescrito**: verifica `X-Hub-Signature-256` (SHA256 + prefijo `sha256=`) vía `messaging.verifyWebhookSignature`, un body sin `request.rawBody` capturado se reporta con motivo propio (`missing_raw_body`) en vez de caer a un fallback que nunca iba a verificar (Meta firma bytes exactos) → `parseWebhook` → itera el lote (un solo POST puede traer N mensajes de chats distintos) → responde `{accepted, duplicates, ignored, statuses}` |
+| `queue/` (p-queue) | ✅ | Errores dentro de una tarea encolada nunca escapan sin catch (evita crash del proceso). Concurrencia global configurable (`QUEUE_CONCURRENCY`, default 10) con serialización por `conversationId`: `Map<number, Promise<void>>` que encadena las tareas de una misma conversación entre sí antes de que compitan por los slots de la cola global — así conversaciones distintas corren en paralelo pero una misma conversación nunca corre dos mensajes a la vez, sin importar la concurrencia configurada. Cada entrada del map se autolimpia al terminar si nadie encoló nada nuevo para esa key mientras corría, para no crecer sin límite en memoria. Sin acoplamiento al proveedor de mensajería (clave numérica `conversationId`) — no necesitó ningún cambio en la Fase 5. **Probado bajo carga**: 40 mensajes (20 conversaciones × 2) procesados en 8.6s con `QUEUE_CONCURRENCY=10` vía un solo POST batcheado de Meta — orden preservado en las 20 conversaciones (verificado contra la base, no solo el log). Sigue siendo una prueba de desarrollo, no tráfico real sostenido |
+| README / `.env.example` / script de simulación | ✅ | `npm run simulate -- "texto"` prueba todo el flujo sin cuenta de Meta. Reescrito en la Fase 5 para el payload de Meta, con `--count`/`--chats` (batching en un solo POST), `--message-id` (prueba de idempotencia), `--status` (acuses de entrega), `--verify` (el GET de verificación) y firma automática si `META_APP_SECRET` está seteada |
 
 Verificado manualmente end-to-end (servidor real + `curl`/`npm run simulate`, dry-run): FAQ,
 intención de compra → derivación, silencio post-derivación, idempotencia ante webhook duplicado,
-integridad referencial de categorías (FK real, no solo a nivel aplicación). El filtro de grupos y de
-`fromMe` de WAHA se retestearon en la Fase 5 como código muerto — no hay equivalente que verificar
-con Meta, ver fila de `webhook/` más arriba.
+integridad referencial de categorías (FK real, no solo a nivel aplicación).
 
 ### Fase 3 (completa) — dashboard y confiabilidad
 
@@ -84,7 +82,7 @@ throttle manda un solo mensaje degradado, no tres); `/health` en verde.
 
 | Módulo | Estado | Notas |
 |---|---|---|
-| `engine/aiEngine.ts` (`AiEngine`) | ✅ | `generateObject` (Vercel AI SDK) contra OpenAI, con `system` + FAQs + historial como contexto. Devuelve `puedeResponder: false` → mismo fallback fijo que `RulesEngine`, nunca texto libre del LLM en ese caso. Timeout 15s, error tipado `AiEngineError` (mismo patrón que `WahaApiError`), sin captura propia — sube hasta `handleIncomingMessage` y activa el modo degradado de la Fase 3 |
+| `engine/aiEngine.ts` (`AiEngine`) | ✅ | `generateObject` (Vercel AI SDK) contra OpenAI, con `system` + FAQs + historial como contexto. Devuelve `puedeResponder: false` → mismo fallback fijo que `RulesEngine`, nunca texto libre del LLM en ese caso. Timeout 15s, error tipado `AiEngineError`, sin captura propia — sube hasta `handleIncomingMessage` y activa el modo degradado de la Fase 3 |
 | `engine/hybridEngine.ts` (`HybridEngine`) | ✅ | Compone `RulesEngine` + `AiEngine`. Solo llama a la IA cuando `RulesEngine` devuelve `categoria === CATEGORY_SIN_MATCH`; si `aiEngine` es `null` (flag apagado), replica el comportamiento exacto de la Fase 1 |
 | `engine/index.ts` | ✅ | Único punto de selección, sin cambios en el resto del sistema (webhook/orquestador/DB no tocados, tal como preveía la interfaz desde la Fase 1) |
 | `config/env.ts` (`AI_FALLBACK_ENABLED`, `OPENAI_API_KEY`, `OPENAI_MODEL`) | ✅ | Apagado por defecto (mismo patrón que `DASHBOARD_PASSWORD`: una feature con costo/dependencia externa nunca debe prenderse sola). Si `AI_FALLBACK_ENABLED=true` sin `OPENAI_API_KEY`, el servidor no arranca (falla rápido) |
@@ -104,12 +102,10 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
 1. **Fase 1 (completa):** motor de reglas, sin dashboard. FAQs cargadas son de ejemplo/simuladas
    (decisión explícita: se prioriza tener el flujo completo funcionando antes que datos reales del
    negocio — ver sección 6).
-2. **Fase 2 (verificada, sin código nuevo en su momento):** multi-sesión con WAHA, ahora
-   **multi-canal con Meta** tras la Fase 5. El concepto se traslada igual: varios `channelId`
-   (antes `sessionName`) comparten la misma lógica sin chocar `chatId`s, sin tocar código — la
-   Fase 5 solo tuvo que renombrar el campo, no rediseñar el mecanismo. Con Meta, varios números de
-   WhatsApp Business bajo la misma app comparten **un solo webhook y un solo token** (a diferencia de
-   WAHA, que necesitaba una sesión + QR por número). Documentado en README, sección "Varios números".
+2. **Fase 2 (verificada, sin código nuevo en su momento):** multi-canal. Varios `channelId`
+   comparten la misma lógica sin chocar `chatId`s. Con Meta, varios números de WhatsApp Business
+   bajo la misma app comparten **un solo webhook y un solo token**. Documentado en README, sección
+   "Varios números".
 3. **Fase 3 (completa):** dashboard de analítica + confiabilidad. Los índices de
    `messages`/`conversations` para las agregaciones, planeados desde la Fase 1, se usaron sin
    necesidad de agregar ninguno nuevo. Detalle en la sección 3 y en el README.
@@ -118,33 +114,21 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
    del usuario, distinta del plan original de reemplazo total. Único punto de cambio en
    `src/engine/index.ts`; el resto del sistema no se tocó, gracias a la interfaz `ResponseEngine`
    (ver `src/engine/types.ts`). Detalle en sección 3.
-5. **Fase 5 (completa, 2026-08-02): migración de WAHA a la Cloud API oficial de Meta.** Reemplaza
-   por completo el módulo de mensajería (`src/waha/` → `src/messaging/`) detrás de una interfaz
-   `MessagingProvider`, mismo patrón que `ResponseEngine` — el motor de decisión, la base de datos
-   (salvo el rename `sessionName`→`channelId`), la cola y el dashboard no se tocaron en su lógica.
-   Resuelve de raíz dos riesgos documentados en la sección 5 (baneo del número, captura de
-   conversaciones personales) y suma una feature nueva (reactivar una conversación derivada). Trae
-   también restricciones nuevas que no existían con WAHA (ventana de 24hs, vencimiento de token,
-   webhook público) — ver sección 5. Plan completo en
+5. **Fase 5 (completa, 2026-08-02): integración de la Cloud API oficial de Meta como proveedor de
+   mensajería.** El módulo `src/messaging/` implementa la interfaz `MessagingProvider`, mismo patrón
+   que `ResponseEngine` — el motor de decisión, la base de datos, la cola y el dashboard no se
+   tocaron en su lógica. Suma una feature nueva (reactivar una conversación derivada) y trae
+   restricciones propias de la Cloud API (ventana de 24hs, vencimiento de token, webhook público) —
+   ver sección 5. Plan completo en
    `C:\Users\User\.claude\plans\contexto-del-proyecto-wobbly-plum.md`. Detalle en sección 3.
 
 ## 5. Riesgos conocidos
 
-- ~~WAHA usa métodos no oficiales para conectarse a WhatsApp y puede resultar en el baneo del
-  número~~ — **resuelto de raíz en la Fase 5 (2026-08-02)**: se migró a la Cloud API oficial de
-  Meta, que no tiene este riesgo — no hay nada que "mitigar", el motivo de fondo desaparece. Las
-  variantes de respuesta (`engine/variant.ts`) se mantienen igual, pero ahora son una decisión de UX
-  (no repetir siempre el mismo texto), no una mitigación de ban.
-- ~~Riesgo de privacidad: conectar un número personal expone conversaciones reales y ajenas al
-  bot~~ — **resuelto de raíz en la Fase 5**: un número de WhatsApp Business en la Cloud API no tiene
-  historial personal ni recibe chats que no sean del negocio — el problema deja de ser posible, no
-  es una mitigación. (Se había confirmado en la práctica con WAHA: una conversación personal real de
-  un contacto del usuario quedó capturada por el webhook; se resolvió en su momento cerrando esa
-  sesión y borrando la base de desarrollo.)
-- ~~El bot no marca los mensajes como "leídos" en WhatsApp~~ — **resuelto en la Fase 5**: la Cloud
-  API sí lo permite. `messaging.markReadAndTyping` marca leído y muestra "escribiendo…" en una sola
-  llamada (a diferencia de WAHA, no hay endpoint separado de "stopTyping" — el indicador se apaga
-  solo al llegar el mensaje real, o a los 25s).
+- Un número de WhatsApp Business en la Cloud API no tiene historial personal ni recibe chats que no
+  sean del negocio, y sí permite marcar mensajes como "leídos": `messaging.markReadAndTyping` marca
+  leído y muestra "escribiendo…" en una sola llamada (no hay endpoint separado de "stopTyping" — el
+  indicador se apaga solo al llegar el mensaje real, o a los 25s). Las variantes de respuesta
+  (`engine/variant.ts`) se mantienen como decisión de UX (no repetir siempre el mismo texto).
 - **`notifyVendor()` sigue siendo un stub** (solo loguea por consola). No hay todavía un canal real de
   notificación al vendedor (WhatsApp interno, email, Slack, etc.). Implementarlo es la pieza que
   falta para que la derivación sea utilizable en la práctica, no solo registrada en la base.
@@ -167,7 +151,7 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
   problema de "Abrir chat" — ver punto 8 de la sección 6 para el detalle completo.
 - ~~Sin reintentos si falla el envío~~ — **resuelto**: `sendTextWithRetry` en
   `conversation/handleIncomingMessage.ts` reintenta hasta 2 veces (backoff 1s, luego 2s) antes de
-  resignarse — salvo que el error venga marcado `retryable: false` (Fase 5: token vencido, ventana de
+  resignarse — salvo que el error venga marcado `retryable: false` (token vencido, ventana de
   24hs cerrada), en cuyo caso corta antes, porque insistir no cambia el resultado. Mitiga, no
   elimina: si el proveedor está caído por más que esos ~3s totales, el mensaje se persiste igual
   (marcado `needsHumanReview`) pero el cliente no recibe nada en ese caso puntual. Sigue siendo
@@ -183,7 +167,7 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
   de prenderlo en producción con tráfico real hay que revisar el pricing vigente del modelo elegido
   (`OPENAI_MODEL`) y, si hace falta, sumar un límite de gasto o rate-limit — no implementado, no
   había un caso de uso real que lo pidiera todavía.
-- **Riesgos nuevos introducidos por la Fase 5 (Cloud API de Meta), ninguno existía con WAHA:**
+- **Riesgos propios de la Cloud API de Meta:**
   - **El access token vence.** El token temporal del App Dashboard dura ~24hs; uso sostenido necesita
     un token permanente de System User (operativo, no de código, pero un tropiezo garantizado la
     primera vez). Por eso el código 190 (token vencido/inválido) se clasifica como no-reintentable
@@ -193,10 +177,9 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
     aprobada dentro de las 24hs desde el último mensaje del cliente. Para este bot (responde al
     instante a mensajes entrantes) prácticamente siempre se cumple — pero es la restricción a tener
     en cuenta el día que se implemente algo proactivo (ver riesgo de `notifyVendor()` arriba).
-  - **El webhook necesita ser públicamente alcanzable por HTTPS**, incluso en desarrollo — a
-    diferencia de WAHA, que corría contra `localhost`. Hace falta un túnel (ngrok/cloudflared) para
-    probar contra la cuenta real de Meta; en producción, el hosting elegido tiene que exponer HTTPS
-    válido. No resuelto todavía porque no hay cuenta de Meta creada (ver sección 6).
+  - **El webhook necesita ser públicamente alcanzable por HTTPS**, incluso en desarrollo. Hace falta
+    un túnel (ngrok/cloudflared) para probar contra la cuenta real de Meta; en producción, el
+    hosting elegido tiene que exponer HTTPS válido.
   - **Costo probablemente ~$0 para el patrón de uso de este bot, a confirmar.** Desde nov-2024 Meta
     dejó de cobrar las conversaciones de servicio (respuestas dentro de la ventana de 24hs); el bot
     solo responde a mensajes entrantes, sin plantillas. El supuesto original de "pago por
@@ -225,17 +208,14 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
 
 ## 6. Próximos pasos
 
-Recorrido hasta acá: (1) FAQs de ejemplo → (2) conectar WAHA con número real (probado y
-desconectado por privacidad) → (3) Fase 2 verificada → Fase 3 completa (dashboard + confiabilidad) →
-Fase 4 implementada, apagada por defecto (IA como fallback) →
-**Fase 5 completa: migración de WAHA a la Cloud API oficial de Meta (2026-08-02)**.
+Recorrido hasta acá: (1) FAQs de ejemplo → (2) Fase 2 verificada → (3) Fase 3 completa (dashboard +
+confiabilidad) → Fase 4 implementada, apagada por defecto (IA como fallback) →
+**Fase 5 completa: integración de la Cloud API oficial de Meta (2026-08-02)**.
 
 1. ~~Cargar las FAQs reales del negocio~~ — decisión del usuario: seguir con las FAQs de ejemplo
    (`src/config/rules.ts`) como muestra/demo por ahora. Reemplazar cuando haya contenido real del
    negocio.
-2. ~~WAHA sigue desconectada a propósito~~ — **superado por la Fase 5**: WAHA se borró del todo, ya
-   no es la vía de conexión. El pendiente equivalente era **crear la cuenta/app de Meta y probar
-   contra un número real — hecho el 2026-08-03**:
+2. **Crear la cuenta/app de Meta y probar contra un número real — hecho el 2026-08-03**:
    - ~~Crear la app en el Meta App Dashboard, agregar WhatsApp, conseguir un número de prueba~~ —
      hecho, `META_PHONE_NUMBER_ID`/`META_ACCESS_TOKEN`/`META_APP_SECRET` reales cargados en `.env`.
    - ~~Levantar un túnel público HTTPS y cargar la Callback URL + Verify Token~~ — hecho con ngrok.
@@ -282,10 +262,10 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
      (solo mockeada en tests), requiere una key real del usuario y tiene costo.
 
    Los otros 5 sí se resolvieron:
-   - ~~Sin reintentos si falla el envío a WAHA~~ — resuelto, ver sección 5 y fila de `conversation/`
-     en sección 3. Adaptado en la Fase 5 al vocabulario de errores de Meta (`retryable`).
-   - ~~`WAHA_HMAC_KEY` opcional en producción~~ — ahora obligatoria si `NODE_ENV=production`.
-     Reemplazado en la Fase 5 por `META_APP_SECRET`/`META_VERIFY_TOKEN`, mismo criterio.
+   - ~~Sin reintentos si falla el envío~~ — resuelto, ver sección 5 y fila de `conversation/`
+     en sección 3, con el vocabulario de errores de Meta (`retryable`).
+   - ~~Verificación de firma del webhook opcional en producción~~ — ahora obligatoria
+     (`META_APP_SECRET`/`META_VERIFY_TOKEN`) si `NODE_ENV=production`.
    - ~~Sin backup del archivo SQLite~~ — `npm run db:backup`, ver sección 3. **Agendado el
      2026-08-04** en el Programador de tareas de Windows de esta máquina (diario 03:00, retiene 30).
      Pendiente si se muda a un servidor de producción: recrear la tarea ahí (o pasar a cron real).
@@ -296,11 +276,10 @@ Fase 4 implementada, apagada por defecto (IA como fallback) →
 
    Un 9no punto salió de esta misma ronda y sigue diferido después de la Fase 5, no resuelto ni
    olvidado — ver detalle actualizado en sección 5 ("Marcar como atendido" es manual...): **detectar
-   que el vendedor respondió manualmente desde WhatsApp** para autorresolver el pendiente. Con WAHA
-   el bloqueo era no poder verificar el payload de `fromMe: true`; con Meta el bloqueo cambió de
-   forma (la Cloud API tampoco ecoa los mensajes propios como `messages`, solo llegan como
-   `statuses` de lo que el bot mandó por API) pero el resultado es el mismo: no hay señal de que el
-   vendedor contestó a mano. No priorizado — no hay caso de uso real todavía que lo pida con fuerza.
+   que el vendedor respondió manualmente desde WhatsApp** para autorresolver el pendiente. La Cloud
+   API no ecoa los mensajes propios como `messages`, solo llegan como `statuses` de lo que el bot
+   mandó por API — no hay señal de que el vendedor contestó a mano. No priorizado — no hay caso de
+   uso real todavía que lo pida con fuerza.
 
 7. **Auditoría de seguridad pre-deploy (2026-08-04, revisado, nada aplicado todavía — pendiente de
    que el usuario diga "dale con eso").** Se revisó el código completo de la migración de Fase 5
@@ -426,12 +405,12 @@ Hereda las convenciones generales de `CONSTITUTION.md` (variables en inglés, co
 español, Conventional Commits, etc.). Adicional a esto:
 
 - El motor de decisión (`src/engine/`, incluye `RulesEngine`, `AiEngine` y `HybridEngine`) no importa
-  nada de `db/` ni `messaging/` (antes `waha/`), ni siquiera tipos — es una regla de diseño explícita
+  nada de `db/` ni `messaging/`, ni siquiera tipos — es una regla de diseño explícita
   (ver comentario en `src/engine/types.ts`) para que se pueda testear y recomponer sin arrastrar
   dependencias. Sí puede importar de `config/` (igual que `RulesEngine` desde la Fase 1): `AiEngine`
   lee `OPENAI_MODEL` de `config/env.ts`.
 - Mismo principio de aislamiento se aplica a `src/messaging/` (Fase 5): el resto del sistema depende
   solo de la interfaz `MessagingProvider`, nunca de `CloudApiProvider` directamente — así se puede
-  reemplazar el proveedor (como pasó con WAHA → Meta) sin tocar webhook/orquestador/dashboard/DB.
+  reemplazar el proveedor de mensajería sin tocar webhook/orquestador/dashboard/DB.
 - Todo lo específico del negocio (FAQs, palabras de intención de compra, mensajes) vive en
   `src/config/`, nunca hardcodeado en `engine/` ni en `conversation/`.

@@ -6,17 +6,16 @@ const SIGNATURE_PREFIX = "sha256=";
  * Verifica la firma HMAC-SHA256 que Meta agrega en el header
  * `X-Hub-Signature-256` de cada webhook, keyed con el **App Secret** (no el
  * access token — son cosas distintas). Si no hay `appSecret` configurado, no se
- * verifica (pensado para desarrollo local, igual que WAHA_HMAC_KEY antes).
+ * verifica (pensado para desarrollo local).
  *
  * Pura a propósito (recibe `appSecret` por parámetro en vez de leer `env`
- * directamente, a diferencia del `verifyWahaHmac` que reemplaza): así se puede
- * testear el caso "sin secret configurado" y el caso "con secret" en el mismo
- * proceso de test, sin pelear con que `env` es un singleton fijado al importar
- * el módulo. `env.META_APP_SECRET` se inyecta desde CloudApiProvider.
+ * directamente): así se puede testear el caso "sin secret configurado" y el
+ * caso "con secret" en el mismo proceso de test, sin pelear con que `env` es
+ * un singleton fijado al importar el módulo. `env.META_APP_SECRET` se inyecta
+ * desde CloudApiProvider.
  *
- * Distinto del HMAC de WAHA en tres cosas: SHA256 en vez de SHA512, el header
- * trae un prefijo `sha256=` que hay que sacar antes de comparar, y la clave es
- * el App Secret de la app de Meta, no una clave arbitraria propia.
+ * El header trae un prefijo `sha256=` que hay que sacar antes de comparar, y
+ * la clave es el App Secret de la app de Meta.
  *
  * Referencia: https://developers.facebook.com/docs/graph-api/webhooks/getting-started#validating-payloads
  */

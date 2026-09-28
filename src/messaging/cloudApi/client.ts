@@ -15,11 +15,10 @@ interface GraphErrorBody {
 }
 
 /**
- * POST genérico contra `{channelId}/messages` de la Graph API. Mismo patrón que
- * el `wahaPost` que reemplaza: timeout con AbortController, error tipado en vez
- * de dejar escapar excepciones crudas de fetch. Cambia el destino (versión +
- * phone_number_id en la URL), el auth (Bearer token) y el parseo del error
- * (Meta manda JSON estructurado incluso en 4xx/5xx, WAHA no siempre).
+ * POST genérico contra `{channelId}/messages` de la Graph API: timeout con
+ * AbortController y error tipado en vez de dejar escapar excepciones crudas
+ * de fetch. Meta manda JSON estructurado con el detalle del error incluso en
+ * respuestas 4xx/5xx.
  */
 async function graphPost(channelId: string, body: unknown): Promise<unknown> {
   const url = `${env.META_GRAPH_BASE_URL}/${env.META_GRAPH_API_VERSION}/${channelId}/messages`;
@@ -109,9 +108,9 @@ export async function sendText(input: SendTextInput): Promise<SendTextResult> {
 }
 
 /**
- * Marca como leído y, opcionalmente, muestra "escribiendo…". Cosmético — igual
- * que startTyping/stopTyping en el WAHA client que reemplaza — así que nunca
- * tira: si falla, se loguea y se sigue con el envío real del mensaje.
+ * Marca como leído y, opcionalmente, muestra "escribiendo…". Cosmético, así
+ * que nunca tira: si falla, se loguea y se sigue con el envío real del
+ * mensaje.
  */
 export async function markReadAndTyping(input: MarkReadAndTypingInput): Promise<void> {
   if (env.META_DRY_RUN) {

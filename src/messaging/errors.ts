@@ -15,8 +15,7 @@ export interface MessagingErrorOptions {
   cause?: unknown;
 }
 
-/** Error tipado para cualquier falla al hablar con un MessagingProvider (mismo
- *  patrón que WahaApiError, que este reemplaza). */
+/** Error tipado para cualquier falla al hablar con un MessagingProvider. */
 export class MessagingError extends Error {
   public readonly status?: number;
   public readonly code?: number;

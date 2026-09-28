@@ -8,8 +8,8 @@ Producto pensado para escalar en fases (ver `CLAUDE.md` para el detalle completo
 - **Fase 1** (motor de reglas, sin IA), **Fase 2** (multi-canal) y **Fase 3** (dashboard +
   confiabilidad) completas — ver [más abajo](#fase-3--dashboard-y-confiabilidad).
 - Fase 4 (IA vía Vercel AI SDK) implementada, apagada por defecto.
-- **Fase 5: conexión a WhatsApp vía la [Cloud API oficial de Meta](https://developers.facebook.com/docs/whatsapp/cloud-api)**
-  (reemplaza a WAHA, que se usó como paso intermedio en el desarrollo — ver `CLAUDE.md`).
+- **Fase 5: conexión a WhatsApp vía la [Cloud API oficial de Meta](https://developers.facebook.com/docs/whatsapp/cloud-api)**,
+  único proveedor de mensajería del bot.
 
 ## Descripción
 
@@ -46,7 +46,7 @@ Ver `.env.example` para la lista completa con comentarios. Las más importantes:
 | `META_APP_SECRET` | App Secret de tu app de Meta. Verifica la firma `X-Hub-Signature-256`. Opcional en `development`/`test`, **obligatoria si `NODE_ENV=production`** (el server no arranca sin ella) | (sin verificar) |
 | `META_VERIFY_TOKEN` | Token elegido por vos, cargado también en el App Dashboard, para el `GET` de verificación del webhook. Mismo criterio que `META_APP_SECRET` | (sin configurar) |
 | `META_DRY_RUN` | Si es `true`, no envía mensajes reales: solo loguea | `false` |
-| `RESPONSE_DELAY_MIN_MS` / `MAX_MS` | Delay aleatorio antes de responder. Con WAHA era una mitigación anti-ban; con la API oficial no aplica ese riesgo, así que el default es 0 (respuesta instantánea) | `0` / `0` |
+| `RESPONSE_DELAY_MIN_MS` / `MAX_MS` | Delay aleatorio antes de responder. La API oficial no tiene riesgo de ban por comportamiento, así que el default es 0 (respuesta instantánea) | `0` / `0` |
 | `QUEUE_CONCURRENCY` | Cuántas conversaciones **distintas** se procesan en paralelo ante un pico de tráfico. Dentro de una misma conversación siempre es 1 mensaje a la vez, sea cual sea este valor | `10` |
 | `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Credenciales de `/dashboard` (Basic Auth). Sin password, el dashboard no se monta | `admin` / (sin dashboard) |
 | `AI_FALLBACK_ENABLED` | Si es `true`, la IA responde las preguntas que el motor de reglas no matcheó (Fase 4) | `false` |
@@ -141,9 +141,8 @@ la IA — no hace falta mantener un contenido separado para el fallback con LLM.
 
 ## Comportamiento de respuesta
 
-Con WAHA (protocolo no oficial) estas señales existían para no comportarse como un bot obvio y
-reducir el riesgo de baneo. Con la Cloud API oficial de Meta ese riesgo no existe — se mantienen
-como decisión de UX, no de mitigación:
+Con la Cloud API oficial de Meta no hay riesgo de ban por comportamiento — estas señales se
+mantienen como decisión de UX, para que las respuestas no se sientan robóticas:
 
 - **Delay antes de responder** (`RESPONSE_DELAY_MIN_MS`/`RESPONSE_DELAY_MAX_MS` en `.env`, `0` por
   defecto — respuesta instantánea). Subilo si preferís que se sienta menos robótico.
@@ -184,10 +183,10 @@ Como consecuencia, si el mismo cliente le escribe al número de "ventas" y al de
 generan dos conversaciones completamente independientes — cada una con su propio estado, sus
 propias respuestas y su propia posible derivación a un vendedor.
 
-A diferencia de WAHA (una sesión + QR por número), varios números de WhatsApp Business bajo la
-misma app de Meta comparten **un solo webhook y un solo token de acceso** — agregar un número es
-solo agregarlo del lado del App Dashboard, sin tocar `.env` ni reiniciar el servidor (el `channelId`
-llega en cada mensaje, no hace falta configurarlo de antemano).
+Varios números de WhatsApp Business bajo la misma app de Meta comparten **un solo webhook y un solo
+token de acceso** — agregar un número es solo agregarlo del lado del App Dashboard, sin tocar
+`.env` ni reiniciar el servidor (el `channelId` llega en cada mensaje, no hace falta configurarlo de
+antemano).
 
 Para que el dashboard muestre un nombre legible en vez del `phone_number_id` crudo, agregalo a
 `CHANNEL_LABELS` en `src/config/channels.ts`:
@@ -384,11 +383,10 @@ npm run db:migrate  # aplica migraciones contra el DATABASE_URL de destino
 npm start            # corre dist/server.js
 ```
 
-El hosting elegido tiene que exponer el servidor por **HTTPS público** — a diferencia de WAHA
-(`localhost`), Meta exige un endpoint alcanzable con certificado válido para el webhook, incluso
-para probar. Cargá la Callback URL real (`https://tu-dominio/webhook/whatsapp`) en el App Dashboard
-y usá un `META_ACCESS_TOKEN` permanente de System User, no el temporal de desarrollo (ver "Cómo
-ejecutar", paso 3).
+El hosting elegido tiene que exponer el servidor por **HTTPS público** — Meta exige un endpoint
+alcanzable con certificado válido para el webhook, incluso para probar. Cargá la Callback URL real
+(`https://tu-dominio/webhook/whatsapp`) en el App Dashboard y usá un `META_ACCESS_TOKEN` permanente
+de System User, no el temporal de desarrollo (ver "Cómo ejecutar", paso 3).
 
 ## Backups
 

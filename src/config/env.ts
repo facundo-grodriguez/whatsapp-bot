@@ -34,7 +34,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1).default("file:./data/bot.db"),
 
   // Meta WhatsApp Cloud API (src/messaging/cloudApi/) — único proveedor de
-  // mensajería (reemplaza a WAHA por completo, ver CLAUDE.md §5).
+  // mensajería.
   META_GRAPH_BASE_URL: z.string().url().default("https://graph.facebook.com"),
   // Meta deprecia versiones de la Graph API con ~2 años de aviso: dejarla
   // configurable evita tener que tocar código para subir de versión.
@@ -51,8 +51,8 @@ const envSchema = z.object({
   // firma X-Hub-Signature-256 de cada webhook. Opcional en development/test,
   // OBLIGATORIA en producción (ver chequeo cruzado más abajo) — sin ella,
   // cualquiera que adivine la URL del webhook puede mandar mensajes falsos como
-  // si vinieran de Meta. Más importante que con WAHA: este webhook es público
-  // por definición (Meta exige HTTPS accesible, WAHA vivía en localhost).
+  // si vinieran de Meta. Crítico porque este webhook es público por definición
+  // (Meta exige HTTPS accesible).
   META_APP_SECRET: optionalNonEmptyString,
   // Token arbitrario elegido por nosotros y cargado también en el App Dashboard:
   // es lo que responde el GET de verificación del webhook (hub.verify_token).
@@ -62,11 +62,10 @@ const envSchema = z.object({
   // Permite probar todo el flujo sin credenciales reales de Meta.
   META_DRY_RUN: booleanFromEnvString.default(false),
 
-  // Comportamiento del bot. Default 0: con WAHA este delay era una mitigación
-  // anti-ban (no parecer un bot); con la API oficial no hay riesgo de ban por
-  // comportamiento, así que responder al instante es la mejor demo posible de
-  // la propuesta de valor ("hoy tardan 4hs"). Las variables se mantienen por si
-  // se quiere volver a un delay por pura preferencia de UX (ver README).
+  // Comportamiento del bot. Default 0: la API oficial no tiene riesgo de ban
+  // por comportamiento, así que responder al instante es la mejor demo posible
+  // de la propuesta de valor ("hoy tardan 4hs"). Las variables se mantienen por
+  // si se quiere volver a un delay por pura preferencia de UX (ver README).
   RESPONSE_DELAY_MIN_MS: z.coerce.number().int().nonnegative().default(0),
   RESPONSE_DELAY_MAX_MS: z.coerce.number().int().nonnegative().default(0),
 

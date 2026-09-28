@@ -23,7 +23,7 @@ export type ConversationState = (typeof CONVERSATION_STATES)[number];
  * saber que ese id es específicamente de Meta.
  *
  * Permite que un negocio con varios números de WhatsApp comparta la misma
- * lógica sin chocar chatIds (equivalente a lo que antes era multi-sesión de WAHA).
+ * lógica sin chocar chatIds.
  */
 export const conversations = sqliteTable(
   "conversations",
@@ -79,7 +79,7 @@ export const messages = sqliteTable(
       .references(() => conversations.id),
     // Meta reintenta el webhook si no responde 200 a tiempo. Esta columna es lo que
     // hace idempotente la inserción: un mismo mensaje nunca se guarda dos veces.
-    // Guarda el `wamid.XXX` que manda la Cloud API (antes, el id de WAHA).
+    // Guarda el `wamid.XXX` que manda la Cloud API.
     providerMessageId: text("provider_message_id").unique(),
     direction: text("direction", { enum: MESSAGE_DIRECTIONS }).notNull(),
     body: text("body").notNull(),

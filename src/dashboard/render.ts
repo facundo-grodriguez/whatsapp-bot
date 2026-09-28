@@ -56,7 +56,7 @@ function formatAge(since: Date, now: Date): string {
 /**
  * WhatsApp abre un chat directo a partir del número si se lo pasás en la URL de
  * wa.me. `chatId` es el `wa_id` que manda la Cloud API de Meta: solo dígitos,
- * sin sufijo (a diferencia del `<numero>@c.us` de WAHA que este reemplaza).
+ * sin sufijo.
  */
 function chatIdToWaLink(chatId: string): string {
   return `https://wa.me/${encodeURIComponent(chatId)}`;
