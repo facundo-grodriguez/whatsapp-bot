@@ -19,6 +19,11 @@ const optionalNonEmptyString = z.preprocess((value) => {
   return value;
 }, z.string().min(1).optional());
 
+// Usados tanto en el schema (default de DASHBOARD_USERNAME) como en el chequeo
+// cruzado de producción más abajo — no hardcodear el valor en dos lugares.
+const DEFAULT_DASHBOARD_USERNAME = "admin";
+const MIN_DASHBOARD_PASSWORD_LENGTH = 12;
+
 /**
  * Esquema de variables de entorno. Falla rápido y con un mensaje claro si falta
  * algo al arrancar el proceso, en vez de fallar más tarde en un punto oscuro del código.
@@ -78,7 +83,7 @@ const envSchema = z.object({
   // Dashboard (Fase 3). Es opcional a propósito: si no hay password configurada,
   // la ruta /dashboard no se monta (ver src/server.ts). Así una feature secundaria
   // nunca impide que arranque el bot, y nunca se sirve un dashboard sin proteger.
-  DASHBOARD_USERNAME: z.string().min(1).default("admin"),
+  DASHBOARD_USERNAME: z.string().min(1).default(DEFAULT_DASHBOARD_USERNAME),
   DASHBOARD_PASSWORD: optionalNonEmptyString,
 
   // IA (Fase 4). Apagado por defecto a propósito: es la única pieza del sistema que
@@ -130,6 +135,27 @@ function loadEnv(): Env {
         "(sin ella, Meta no puede verificar la Callback URL del webhook)",
     );
     process.exit(1);
+  }
+
+  // Si el dashboard está habilitado (DASHBOARD_PASSWORD seteada) en producción,
+  // las credenciales de desarrollo (usuario "admin", password corta) no alcanzan
+  // — Basic Auth es la única protección de esa ruta.
+  if (parsed.data.NODE_ENV === "production" && parsed.data.DASHBOARD_PASSWORD) {
+    if (parsed.data.DASHBOARD_USERNAME === DEFAULT_DASHBOARD_USERNAME) {
+      console.error(
+        `Configuración inválida: DASHBOARD_USERNAME no puede seguir siendo "${DEFAULT_DASHBOARD_USERNAME}" ` +
+          "con NODE_ENV=production (elegí un usuario propio)",
+      );
+      process.exit(1);
+    }
+
+    if (parsed.data.DASHBOARD_PASSWORD.length < MIN_DASHBOARD_PASSWORD_LENGTH) {
+      console.error(
+        `Configuración inválida: DASHBOARD_PASSWORD debe tener al menos ${MIN_DASHBOARD_PASSWORD_LENGTH} ` +
+          "caracteres con NODE_ENV=production",
+      );
+      process.exit(1);
+    }
   }
 
   return parsed.data;

@@ -8,8 +8,8 @@ Producto pensado para escalar en fases (ver `CLAUDE.md` para el detalle completo
 - **Fase 1** (motor de reglas, sin IA), **Fase 2** (multi-canal) y **Fase 3** (dashboard +
   confiabilidad) completas — ver [más abajo](#fase-3--dashboard-y-confiabilidad).
 - Fase 4 (IA vía Vercel AI SDK) implementada, apagada por defecto.
-- **Fase 5: conexión a WhatsApp vía la [Cloud API oficial de Meta](https://developers.facebook.com/docs/whatsapp/cloud-api)**,
-  único proveedor de mensajería del bot.
+- **Fase 5** (Cloud API oficial de Meta como único proveedor de mensajería) completa — ver
+  [más abajo](#fase-5--cloud-api-de-meta).
 
 ## Descripción
 
@@ -32,6 +32,11 @@ cp .env.example .env    # placeholders alcanzan para dry-run; ver "Variables de 
 npm run db:migrate
 ```
 
+> Antes de exponer esto en producción (`NODE_ENV=production`): `META_APP_SECRET` y
+> `META_VERIFY_TOKEN` pasan a ser obligatorios (el server no arranca sin ellos), y hay que reemplazar
+> los placeholders de `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` por valores propios — el server
+> tampoco arranca si el usuario sigue siendo `admin` o la password tiene menos de 12 caracteres.
+
 ## Variables de entorno
 
 Ver `.env.example` para la lista completa con comentarios. Las más importantes:
@@ -48,7 +53,7 @@ Ver `.env.example` para la lista completa con comentarios. Las más importantes:
 | `META_DRY_RUN` | Si es `true`, no envía mensajes reales: solo loguea | `false` |
 | `RESPONSE_DELAY_MIN_MS` / `MAX_MS` | Delay aleatorio antes de responder. La API oficial no tiene riesgo de ban por comportamiento, así que el default es 0 (respuesta instantánea) | `0` / `0` |
 | `QUEUE_CONCURRENCY` | Cuántas conversaciones **distintas** se procesan en paralelo ante un pico de tráfico. Dentro de una misma conversación siempre es 1 mensaje a la vez, sea cual sea este valor | `10` |
-| `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Credenciales de `/dashboard` (Basic Auth). Sin password, el dashboard no se monta | `admin` / (sin dashboard) |
+| `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Credenciales de `/dashboard` (Basic Auth). Sin password, el dashboard no se monta. **Con `NODE_ENV=production`, el usuario no puede seguir siendo `admin` y la password necesita 12+ caracteres** (el server no arranca si no) | (placeholders en `.env.example`, a cambiar) |
 | `AI_FALLBACK_ENABLED` | Si es `true`, la IA responde las preguntas que el motor de reglas no matcheó (Fase 4) | `false` |
 | `OPENAI_API_KEY` | API key de OpenAI (**requerida si `AI_FALLBACK_ENABLED=true`**) | — |
 | `OPENAI_MODEL` | Modelo de OpenAI a usar | `gpt-4o-mini` |
@@ -122,7 +127,8 @@ Todo lo específico del negocio vive en `src/config/`, nunca hardcodeado en la l
 
 - **`src/config/rules.ts`** — FAQs: cada entrada tiene `category`, `categoryLabel`, `keywords`
   (frases que activan la regla) y `responses` (array de variantes). La primera regla que matchea
-  gana; la respuesta se elige al azar entre las variantes (ver "Anti-ban" más abajo).
+  gana; la respuesta se elige al azar entre las variantes (ver "Comportamiento de respuesta" más
+  abajo).
 - **`src/config/purchaseIntent.ts`** — palabras/frases que se interpretan como intención de
   compra (derivan la conversación a un vendedor).
 - **`src/config/messages.ts`** — variantes del mensaje genérico de fallback y del mensaje de
@@ -257,11 +263,13 @@ nunca impide que el bot funcione.
 
 ```
 http://localhost:3001/dashboard                          # todo el historial
-http://localhost:3001/dashboard?from=2026-08-01&to=2026-08-31   # filtrado por fecha
+http://localhost:3001/dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD   # filtrado por fecha
 ```
 
 > En producción, poné esto detrás de un reverse proxy con TLS — Basic Auth manda las credenciales
-> sin cifrar en cada request si no hay HTTPS.
+> sin cifrar en cada request si no hay HTTPS. Además, con `NODE_ENV=production` el server no arranca
+> si `DASHBOARD_USERNAME` sigue siendo `admin` o si `DASHBOARD_PASSWORD` tiene menos de 12
+> caracteres — cambiá los placeholders de `.env.example` por valores propios antes de desplegar.
 
 ### Modo degradado
 
@@ -328,6 +336,20 @@ punto de selección del motor, tal como preveía la interfaz `ResponseEngine` de
   mensajes que sí matcheen alguna FAQ, o revisar `tests/engine/aiEngine.test.ts` /
   `hybridEngine.test.ts`, que mockean la llamada a OpenAI.
 
+## Fase 5 — Cloud API de Meta
+
+**Completa.** La Cloud API oficial de Meta (`src/messaging/cloudApi/`) es el único proveedor de
+mensajería del bot, detrás de la interfaz `MessagingProvider` — el resto del sistema (motor de
+decisión, base de datos, cola, dashboard) no depende de Meta directamente.
+
+Esto ya se explica en detalle en otras secciones de este README, no se repite acá:
+
+- Cómo conectar una cuenta real y sus restricciones (ventana de 24hs, token temporal vs.
+  permanente, webhook público por HTTPS) — ver ["Cómo ejecutar", paso 3](#3-conectar-una-cuenta-real-de-meta).
+- Delay configurable, indicador de "escribiendo…" y variantes de respuesta — ver
+  [Comportamiento de respuesta](#comportamiento-de-respuesta).
+- Módulos y tests involucrados — ver [Estructura](#estructura) y [Testing](#testing).
+
 ## Estructura
 
 ```
@@ -361,13 +383,13 @@ ecosystem.config.cjs  Config de PM2 para producción (Fase 3)
 |---|---|
 | `fastify` | Servidor HTTP del webhook y `/health` |
 | `drizzle-orm` + `@libsql/client` | ORM y driver de SQLite (archivo local, sin compilación nativa) |
-| `drizzle-kit` | Generación y aplicación de migraciones |
+| `drizzle-kit` (dev) | Generación y aplicación de migraciones |
 | `zod` | Validación de variables de entorno y de los payloads de la Cloud API de Meta |
 | `p-queue` | Cola de procesamiento en memoria para no bloquear el webhook |
 | `pino-pretty` | Logs legibles en desarrollo (Fastify usa pino) |
 | `ai` + `@ai-sdk/openai` | Fallback con IA de la Fase 4 (`AiEngine`), solo activo si `AI_FALLBACK_ENABLED=true` |
-| `vitest` | Tests del motor de reglas y de IA |
-| `tsx` | Ejecutar TypeScript directo en desarrollo, sin paso de build |
+| `vitest` (dev) | Tests del motor de reglas y de IA |
+| `tsx` (dev) | Ejecutar TypeScript directo en desarrollo, sin paso de build |
 
 No se agregó ninguna dependencia para lo que Node ya resuelve nativo (`fetch`, `crypto` para el
 HMAC, etc.).
