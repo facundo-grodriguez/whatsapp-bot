@@ -72,10 +72,10 @@ async function graphPost(channelId: string, body: unknown): Promise<unknown> {
 
 /**
  * Los wa_id de celulares argentinos llegan con un "9" extra después del código
- * de país (ej. wa_id entrante "5491124722554"), pero la Cloud API rechaza el
+ * de país (ej. wa_id entrante "5491100000000"), pero la Cloud API rechaza el
  * envío a ese mismo string tal cual (131030 "Recipient phone number not in
  * allowed list" en sandbox) — hay que sacar el 9 al mandar. Confirmado con la
- * API real: "5491124722554" rechazado, "541124722554" aceptado y resuelto por
+ * API real: "5491100000000" rechazado, "541100000000" aceptado y resuelto por
  * Meta al mismo wa_id. No se aplica a otros países (no hay evidencia de que
  * tengan el mismo quirk, y tocar el número de otro país a ciegas es más
  * riesgoso que dejarlo como vino).

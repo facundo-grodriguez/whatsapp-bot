@@ -25,11 +25,11 @@ describe("sendText — formato del destinatario para Argentina", () => {
   });
 
   it("saca el 9 de un chatId argentino (549...) antes de mandar", async () => {
-    await sendText({ channelId: "123", chatId: "5491124722554", text: "hola" });
+    await sendText({ channelId: "123", chatId: "5491100000000", text: "hola" });
 
     const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(options.body as string);
-    expect(body.to).toBe("541124722554");
+    expect(body.to).toBe("541100000000");
   });
 
   it("no toca un chatId que no empieza con 549 (ej. un número de EE.UU.)", async () => {
@@ -41,10 +41,10 @@ describe("sendText — formato del destinatario para Argentina", () => {
   });
 
   it("no toca un chatId argentino que ya viene sin el 9", async () => {
-    await sendText({ channelId: "123", chatId: "541124722554", text: "hola" });
+    await sendText({ channelId: "123", chatId: "541100000000", text: "hola" });
 
     const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(options.body as string);
-    expect(body.to).toBe("541124722554");
+    expect(body.to).toBe("541100000000");
   });
 });

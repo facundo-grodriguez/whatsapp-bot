@@ -214,10 +214,10 @@ un mensaje que no matchee ninguna FAQ, con una `OPENAI_API_KEY` real.
   Verificar con `GET /{waba-id}/subscribed_apps` si vuelve a pasar (ej. con una WABA nueva).
 - **Los wa_id de celulares argentinos necesitan sacarse el `9` para responder, aunque lo traigan al
   recibir.** Descubierto el 2026-08-03: un mensaje entrante de un celular argentino llega con
-  wa_id `549...` (ej. `5491124722554`), pero mandarle una respuesta a ese mismo string tal cual lo
+  wa_id `549...` (ej. `5491100000000`), pero mandarle una respuesta a ese mismo string tal cual lo
   rechaza la Cloud API (`131030 Recipient phone number not in allowed list` en sandbox — probable-
   mente también fuera de sandbox, no confirmado todavía con un número de producción real). Confirmado
-  contra la API real: `5491124722554` rechazado, `541124722554` (mismo número sin el 9) aceptado y
+  contra la API real: `5491100000000` rechazado, `541100000000` (mismo número sin el 9) aceptado y
   resuelto por Meta al mismo wa_id. Fix aplicado en `toOutboundRecipient()`
   (`src/messaging/cloudApi/client.ts`), cubierto por `tests/messaging/client.test.ts`. Acotado a
   distinguir por wa_id argentino, sin tocar números de otros países (no hay evidencia de que tengan
